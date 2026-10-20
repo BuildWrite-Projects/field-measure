@@ -36,7 +36,12 @@
   --ok:#49bd82; --miss:#ff6d5c; --grid:#242b31;
   color-scheme:dark;
 }
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* touch-action:manipulation is what stops iOS double-tap from zooming the
+   whole app. Pinch is killed separately, in script, so that the one place
+   it still works is the full-screen sketch. The canvas overrides this with
+   touch-action:none below, because the drawing handles its own pinch and
+   drag and must never hand them to the browser. */
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);overflow:hidden}
 #app{display:flex;flex-direction:column;height:100%}
@@ -74,6 +79,8 @@ header h1{font-family:var(--display);font-size:21px;letter-spacing:.06em;text-tr
 .mprimary{background:var(--accent);color:var(--accent-ink)}
 .msecondary{background:var(--surface-2);color:var(--ink-2)}
 .mdanger{background:var(--miss);color:#fff}
+.mwall{text-transform:none;letter-spacing:0;font-family:var(--body);font-size:14.5px;font-weight:600;
+  text-align:left;padding:12px 13px}
 .chk{font-family:var(--body);font-size:12px;line-height:1.45;color:var(--ink-2);padding:6px 0 2px}
 .chk.ok{color:var(--ok);font-weight:600}
 .chk.bad{color:var(--miss);font-weight:600}
@@ -89,6 +96,8 @@ header h1{font-family:var(--display);font-size:21px;letter-spacing:.06em;text-tr
   border-radius:999px;padding:5px 13px;font-size:13px;font-weight:600;font-family:var(--body)}
 .chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .chip.add{color:var(--accent);border-color:var(--accent);background:none;font-weight:700}
+.chip.untied{border-color:var(--miss);color:var(--miss)}
+.chip.on.untied{background:var(--ink);color:var(--bg);border-color:var(--miss)}
 #hint{flex:0 0 auto;background:var(--surface-2);color:var(--ink-2);font-size:12px;line-height:1.35;padding:7px 16px;border-bottom:1px solid var(--line)}
 
 #stage{position:relative;flex:1 1 auto;min-height:0}
@@ -304,15 +313,14 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
 </div>
 
 <script>
-/* The publish step wraps this file in its own document skeleton, so every
-   tag written above lands in <body>, where Safari never looks for an app
-   icon. Put them in the real <head> at runtime instead. The icon is
-   carried inline so it cannot depend on how the published file paths
-   resolve; if the published PNG does load, we prefer it. */
+/* Safari never looks in <body> for an app icon, so the tags go into the real
+   <head> at runtime. The icon is carried inline so it cannot depend on how
+   the published file paths resolve; if the published PNG does load, we
+   prefer it. */
 (function(){
   var head=document.head||document.getElementsByTagName('head')[0];
   if(!head)return;
-  var ICON_DATA='data:image/png;base64,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';
+  var ICON_DATA='data:image/png;base64,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';
   function meta(n,v){
     var m=document.createElement('meta');m.setAttribute('name',n);m.setAttribute('content',v);
     head.appendChild(m);
@@ -361,6 +369,9 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
     img.src=cands[i];
   })(0);
 })();
+/* Is this page running inside another page? On GitHub Pages it is not, which
+   is what lets the share sheet and a mail draft work. */
+function framedNow(){try{return window.top!==window.self;}catch(e){return true;}}
 var KINDS=[['window','Window','W'],['door','Door','D'],['slider','Slider','S'],
   ['garage','Garage','G'],['bay','Bay / bow','B'],['other','Other','?']];
 function kindOf(o){return (o&&o.kind)||'window';}
@@ -445,9 +456,6 @@ function withShape(sh,fn){
 }
 readDB();
 
-/* The phone is not where this lives. localStorage keeps the app instant and
-   usable with no signal; the artifact's own store is the copy that survives a
-   dead battery, a cleared cache or a different browser. */
 /* Where measurements live is storage.js's business, not this file's.
    localStorage keeps the app instant and usable with no signal; the database
    behind storage.js is the copy that survives a dead battery or a new phone. */
@@ -524,6 +532,55 @@ function wallLen(i){return(S.walls[i]&&S.walls[i].len)||'';}
 function setWallLen(i,v){if(!S.walls[i])S.walls[i]={};S.walls[i].len=v;}
 function endGap(i){return(S.walls[i]&&S.walls[i].endGap)||'';}
 function setEndGap(i,v){if(!S.walls[i])S.walls[i]={};S.walls[i].endGap=v;}
+
+/* ---------- where a detached outline sits ----------
+   A pool or a shed is drawn as its own outline, away from the house. Where it
+   sits is not in the drawing — the drawing is rough. It lives as two numbers
+   taken off one house wall: straight out from that wall, and along that wall
+   from its top-left corner (the same anchor the opening spacing uses, so the
+   two never disagree). Those two numbers plus the outline's own dimensions
+   are everything SketchUp needs to put it in the right place. */
+function tieOf(sh){return (sh&&sh.tie)||null;}
+function tieDone(sh){var t=tieOf(sh);return !!(t&&t.out&&t.along);}
+function tieRefIdx(t){return (t&&t.shape!=null)?t.shape:0;}
+function tieRefName(j,t){
+  var r=j&&j.shapes&&j.shapes[tieRefIdx(t)];
+  return (r&&r.name)||'House';
+}
+/* A wall of some other outline, named the way it reads in a list. */
+function shapeWallLabel(sh,w){
+  return withShape(sh,function(){
+    var L=showLen(wallLen(w));
+    return sh.name+'  wall '+(w+1)+'  —  '+(L||'length not taken');
+  });
+}
+/* A tie belongs on anything that is not the first outline. The first outline
+   is the house: it is what everything else is measured from. */
+function needsTie(j,si){return si>0;}
+function tieText(j,sh){
+  var t=tieOf(sh);
+  if(!t||!t.out||!t.along)return '';
+  return showLen(t.out)+' out  ·  '+showLen(t.along)+' along';
+}
+/* A little picture so the two numbers can't be swapped by mistake. */
+function tieSVG(refName,w){
+  return '<svg viewBox="0 0 100 42" aria-hidden="true">'+
+    '<text x="6" y="5.4" font-size="3.6" font-family="IBM Plex Sans,sans-serif" fill="var(--ink-2)">top-left corner</text>'+
+    '<line x1="6" y1="9" x2="94" y2="9" stroke="var(--ink)" stroke-width="1.7"/>'+
+    '<line x1="6" y1="6.4" x2="6" y2="11.6" stroke="var(--ink)" stroke-width="1.2"/>'+
+    '<text x="88" y="14.6" text-anchor="end" font-size="3.6" font-family="IBM Plex Sans,sans-serif" fill="var(--ink-2)">'+
+      refName.toUpperCase()+' WALL '+(w+1)+'</text>'+
+    '<line x1="6" y1="17" x2="54" y2="17" stroke="var(--ink-2)" stroke-width="0.6" stroke-dasharray="2 1.4"/>'+
+    '<line x1="6" y1="15.2" x2="6" y2="18.8" stroke="var(--ink-2)" stroke-width="0.6"/>'+
+    '<line x1="54" y1="15.2" x2="54" y2="18.8" stroke="var(--ink-2)" stroke-width="0.6"/>'+
+    '<text x="30" y="22.6" text-anchor="middle" font-size="4.2" font-family="Barlow Condensed,sans-serif" font-weight="700" fill="var(--ink-2)">ALONG</text>'+
+    '<line x1="54" y1="9" x2="54" y2="28" stroke="var(--ink-2)" stroke-width="0.6" stroke-dasharray="2 1.4"/>'+
+    '<text x="57" y="20" font-size="4.2" font-family="Barlow Condensed,sans-serif" font-weight="700" fill="var(--ink-2)">OUT</text>'+
+    '<rect x="54" y="28" width="40" height="11" rx="1.2" fill="none" stroke="var(--accent)" stroke-width="1.4"/>'+
+    '<text x="74" y="35.1" text-anchor="middle" font-size="3.6" font-family="Barlow Condensed,sans-serif" font-weight="700" fill="var(--accent)">THIS OUTLINE</text>'+
+    '</svg>'+
+    '<div class="cap">Both numbers run to the nearest corner of this outline — the corner closest to that wall.</div>';
+}
 
 /* ---------- where openings sit along a wall ----------
    Measurements run from one end of the wall, and that end has to be the same
@@ -602,7 +659,6 @@ function applyGaps(w){
   });
   return true;
 }
-
 /* ---------- canvas ---------- */
 var cv=document.getElementById('c'),ctx=cv.getContext('2d'),W=0,H=0;
 function cssvar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
@@ -1437,6 +1493,21 @@ cv.addEventListener('wheel',function(e){
   V.ox=mx-(mx-V.ox)*f;V.oy=my-(my-V.oy)*f;V.s*=f;paint();
 },{passive:false});
 
+/* ---------- pinch, and where it is allowed ----------
+   The drawing does its own pinch through the pointer events above, and the
+   canvas is set to touch-action:none so the browser never sees those touches.
+   Everywhere else a pinch is Safari zooming the page: menus drift, the keypad
+   slides half off, and nothing lines up again until you pinch back. So the
+   browser's own pinch is refused — except on the full-screen sketch, which is
+   the one view where zooming in on the picture is the whole point. */
+['gesturestart','gesturechange','gestureend'].forEach(function(nm){
+  document.addEventListener(nm,function(e){
+    var fs=document.getElementById('fullshot');
+    if(fs&&!fs.hidden)return;        /* full-screen sketch: pinch away */
+    e.preventDefault();
+  },{passive:false});
+});
+
 function closeShape(){
   if(S.locked||S.pts.length<3)return;
   snapshot();
@@ -1450,7 +1521,6 @@ function closeShape(){
   }
   S.closed=true; render();
 }
-
 /* ---------- entry sheet ---------- */
 var sheet=document.getElementById('sheet'),fieldsEl=document.getElementById('fields'),
     fracsEl=document.getElementById('fracs'),padEl=document.getElementById('pad'),
@@ -1791,6 +1861,52 @@ function askHeight(name){
       S.heights[name]=v[0];render();
     }});
 }
+/* Pick which wall the pool, shed or patio was measured off. */
+function openTiePicker(si){
+  var j=cur();if(!j)return;
+  var sh=j.shapes[si];if(!sh)return;
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle','Where does '+sh.name+' sit?'));
+  mbox.appendChild(el('div','chk',
+    'Pick the wall you measured off. Next you give two numbers: straight out from that wall, and along it from its top-left corner.'));
+  var any=0;
+  j.shapes.forEach(function(ref,ri){
+    if(ri===si)return;
+    var m=shapeSegs(ref);
+    for(var w=0;w<m;w++){(function(w){
+      any++;
+      var b=el('button','mbtn msecondary mwall',shapeWallLabel(ref,w));
+      b.addEventListener('click',function(){closeModal();askTie(si,ri,w);});
+      mbox.appendChild(b);
+    })(w);}
+  });
+  if(!any)mbox.appendChild(el('div','empty-state',
+    'There is no other outline with walls on it yet. Draw the house first, then come back and tie '+sh.name+' to one of its walls.'));
+  var cl=el('button','mbtn msecondary','Close');
+  cl.addEventListener('click',function(){closeModal();render();});
+  mbox.appendChild(cl);
+}
+function askTie(si,ri,w){
+  var j=cur();if(!j)return;
+  var sh=j.shapes[si],ref=j.shapes[ri];
+  if(!sh||!ref)return;
+  var old=sh.tie?{shape:sh.tie.shape,wall:sh.tie.wall,out:sh.tie.out,along:sh.tie.along}:null;
+  var same=old&&tieRefIdx(old)===ri&&old.wall===w;
+  SHremove=sh.tie?function(){delete sh.tie;closeSheet();render();}:null;
+  openSheet({title:sh.name+' off '+ref.name+' wall '+(w+1),
+    removeLabel:'Clear this location',
+    diagram:tieSVG(ref.name,w),
+    fields:[{label:'Straight out from the wall',value:same?old.out:''},
+            {label:'Along the wall, from its top-left corner',value:same?old.along:''}],
+    done:function(v){
+      recordMeas(function(){
+        if(old)sh.tie={shape:old.shape,wall:old.wall,out:old.out,along:old.along};
+        else delete sh.tie;
+      },lastWall);
+      sh.tie={shape:ri,wall:w,out:v[0],along:v[1]};
+      render();
+    }});
+}
 buildPad();
 
 /* ---------- panel ---------- */
@@ -1837,9 +1953,14 @@ function dedupe(sh){
   return fixed;
 }
 function blanks(){
-  var walls=[],opens=[],gaps=[],hts=[],j=cur();
+  var walls=[],opens=[],gaps=[],hts=[],ties=[],j=cur();
   (j&&j.shapes?j.shapes:[]).forEach(function(sh,si){
     var m=shapeSegs(sh);
+    /* A detached outline with no tie is a drawing of a pool nobody can place.
+       It counts as missing exactly the way an unmeasured wall does. */
+    if(needsTie(j,si)&&!tieDone(sh))
+      ties.push({shape:si,kind:'tie',
+        label:'where '+sh.name+' sits relative to '+((j.shapes[0]&&j.shapes[0].name)||'the house')});
     for(var q=0;q<m;q++)
       if(!(sh.walls&&sh.walls[q]&&sh.walls[q].len))
         walls.push({shape:si,kind:'wall',idx:q,label:sh.name+' wall '+(q+1)});
@@ -1863,7 +1984,7 @@ function blanks(){
     });
   });
   HEIGHTS.forEach(function(h){if(!S.heights[h.k])hts.push({kind:'height',label:h.k});});
-  return walls.concat(hts,opens,gaps);
+  return walls.concat(ties,hts,opens,gaps);
 }
 var flashAt=null,flashEnd=0,flashTimer=null;
 var findIdx=0,lastTotal=-1,lastWall=-1,nextDir=1;
@@ -1896,6 +2017,11 @@ function focusAt(p){
     paint();
   },90);
 }
+function openTab(name){
+  S.tab=name;panelOpen=true;
+  [].forEach.call(document.querySelectorAll('.tab'),function(x){
+    x.setAttribute('aria-selected',x.dataset.tab===name?'true':'false');});
+}
 function goToBlank(){
   var list=blanks();
   if(!list.length)return;
@@ -1919,11 +2045,18 @@ function goToBlank(){
   var b=list[findIdx];
   findIdx++;
   if(b.kind==='height'){
-    S.tab='heights';panelOpen=true;
-    [].forEach.call(document.querySelectorAll('.tab'),function(x){
-      x.setAttribute('aria-selected',x.dataset.tab==='heights'?'true':'false');});
+    openTab('heights');
     render();
     askHeight(b.label);
+    return;
+  }
+  if(b.kind==='tie'){
+    if(cur().active!==b.shape){save();cur().active=b.shape;intoState();}
+    openTab('walls');
+    setMode('measure');openTab('walls');fitView();render();
+    var sht=cur().shapes[b.shape],tt=tieOf(sht);
+    if(tt)askTie(b.shape,tieRefIdx(tt),tt.wall);
+    else openTiePicker(b.shape);
     return;
   }
   if(cur().active!==b.shape){save();cur().active=b.shape;intoState();}
@@ -2071,6 +2204,15 @@ function drawingCanvas(){
         cx/=sh.pts.length;cy/=sh.pts.length;
         g.fillStyle=INK2;g.font='700 24px "Barlow Condensed",Arial,sans-serif';
         g.fillText(sh.name.toUpperCase(),cx,cy);
+        /* the two numbers that place it against the house — without these the
+           outline is just a shape floating on the page */
+        var tn=sh.tie;
+        if(tn&&tn.out&&tn.along){
+          g.font='400 18px "IBM Plex Sans",Arial,sans-serif';
+          g.fillStyle=INK2;
+          g.fillText(showLen(tn.out)+' off '+tieRefName(j,tn)+' wall '+(tn.wall+1)+
+            '  ·  '+showLen(tn.along)+' along',cx,cy+24);
+        }
       }
     });
   });
@@ -2208,6 +2350,25 @@ function roofCheck(){
   var pred=eave+span/2*(parseFloat(m[1])/12);
   return{pred:pred,actual:ridge,diff:ridge-pred,span:span};
 }
+/* A tie that runs further along the wall than the wall is long is a number
+   that cannot be true. It is the one check worth making on a location. */
+function tieFlags(){
+  var j=cur(),out=[];
+  if(!j||!j.shapes)return out;
+  j.shapes.forEach(function(sh,si){
+    if(!needsTie(j,si))return;
+    var t=tieOf(sh);
+    if(!t||!t.out||!t.along)return;
+    var ref=j.shapes[tieRefIdx(t)];
+    if(!ref)return;
+    var L=withShape(ref,function(){return dim16(wallLen(t.wall));});
+    if(!L)return;
+    var along=dim16(t.along);
+    if(along>L+8)out.push({shape:si,name:sh.name,along:along,len:L,
+      ref:(ref.name||'house'),wall:t.wall});
+  });
+  return out;
+}
 /* Everything the arithmetic doubts, in the order you would walk past it, so
    going back out is one lap of the house rather than a zig-zag. */
 function reviewFlags(){
@@ -2227,6 +2388,12 @@ function reviewFlags(){
     out.push({pos:g.i,kind:'grade',i:g.i,
       title:'Grade at corner '+(g.i+1)+' — '+showLen(S.pts[g.i].g),
       why:'Sits '+fmt16(Math.abs(g.v-g.med))+' off the other readings. Could be real ground, could be a typo.'});
+  });
+  tieFlags().forEach(function(t){
+    out.push({pos:-1,kind:'tie',shape:t.shape,
+      title:t.name+' sits past the end of that wall',
+      why:'It is tied '+fmt16(t.along)+' along '+t.ref+' wall '+(t.wall+1)+
+        ', but that wall is only '+fmt16(t.len)+' long. Check which corner you measured from.'});
   });
   for(var w=0;w<n;w++){
     if(wallApprox(w))continue;
@@ -2267,6 +2434,12 @@ function openReview(){
         else if(f.kind==='grade'){focusAt(S.pts[f.i]);setMode('measure');render();askGrade(f.i);}
         else if(f.kind==='gap'){focusAt(midOf(f.w));setMode('open');render();
           var ch=gapChain(f.w);if(ch.length)askGap(f.w,ch[0]);}
+        else if(f.kind==='tie'){
+          if(cur().active!==f.shape){save();cur().active=f.shape;intoState();}
+          openTab('walls');setMode('measure');openTab('walls');fitView();render();
+          var st=cur().shapes[f.shape],tt=tieOf(st);
+          if(tt)askTie(f.shape,tieRefIdx(tt),tt.wall);else openTiePicker(f.shape);
+        }
         else backToReview=false;
       });
       acts.appendChild(go);
@@ -2299,6 +2472,21 @@ function openReview(){
   }
   sec('Wall lengths');
   for(var i=0;i<n;i++)line('Wall '+(i+1),showLen(wallLen(i)));
+
+  /* Every outline that is not the house needs its two numbers, or there is
+     nothing to place it with back at the desk. */
+  if(j&&j.shapes&&j.shapes.length>1){
+    var tbad={};tieFlags().forEach(function(t){tbad[t.shape]=1;});
+    sec('Where the other outlines sit');
+    j.shapes.forEach(function(sh2,i2){
+      if(!needsTie(j,i2))return;
+      var t=tieOf(sh2);
+      if(t&&t.out&&t.along)
+        line(sh2.name,showLen(t.out)+' out  ·  '+showLen(t.along)+' along',
+          'from '+tieRefName(j,t)+' wall '+(t.wall+1)+', along from its top-left corner',tbad[i2]);
+      else line(sh2.name,'','not tied to the house yet');
+    });
+  }
 
   var gl=[];
   for(var q=0;q<S.pts.length;q++)if(S.pts[q].g)gl.push(q);
@@ -2353,11 +2541,22 @@ function summaryText(){
   var out=[],j=cur();
   out.push('EXTERIOR MEASURE'+(j?' \u2014 '+j.name:''));
   out.push('All measurements shown in '+(units()==='in'?'inches':'feet and inches')+'.');
-  (j&&j.shapes?j.shapes:[curShape()]).forEach(function(sh){
+  (j&&j.shapes?j.shapes:[curShape()]).forEach(function(sh,si){
     withShape(sh,function(){
       var n=segCount();
       out.push('');
       out.push(sh.name.toUpperCase()+'  ('+n+' walls, in order walked)');
+      /* where it sits, before anything else about it — this is the line that
+         lets it be placed in SketchUp at all */
+      if(j&&needsTie(j,si)){
+        var t=tieOf(sh);
+        if(t&&(t.out||t.along))
+          out.push('  SITS  '+(showLen(t.out)||'— MISSING —')+' out from '+tieRefName(j,t)+
+            ' wall '+(t.wall+1)+',  '+(showLen(t.along)||'— MISSING —')+
+            ' along that wall from its top-left corner');
+        else
+          out.push('  SITS  — MISSING — (not tied to the house)');
+      }
       for(var i=0;i<n;i++){
         out.push('  Wall '+(i+1)+'  '+(showLen(wallLen(i))||'— MISSING —'));
         wallOpenings(i).forEach(function(oi){
@@ -2407,6 +2606,23 @@ function render(){
     var done=0;for(var i=0;i<n;i++)if(wallLen(i))done++;
     var t=el('div','tally'+(n&&done===n?' done':''),n?done+' of '+n+' walls measured'+(done===n?'  ✓':''):'No walls yet');
     view.appendChild(t);
+    /* A pool or a shed is drawn away from the house, so the drawing cannot
+       say where it is. Two numbers off one house wall can. */
+    var jw=cur();
+    if(jw&&needsTie(jw,jw.active)){
+      var shw=jw.shapes[jw.active],tw=tieOf(shw);
+      view.appendChild(el('div','sub','Where this outline sits'));
+      view.appendChild(rowBtn(
+        tw?('Off '+tieRefName(jw,tw)+' wall '+(tw.wall+1)):'Not tied to the house yet',
+        tw?'out from the wall, then along it':'tap to pick the wall you measured off',
+        tieText(jw,shw),
+        function(){
+          var j2=cur(),t2=tieOf(curShape());
+          if(t2)askTie(j2.active,tieRefIdx(t2),t2.wall);
+          else openTiePicker(j2.active);
+        }));
+      view.appendChild(el('div','sub','Walls'));
+    }
     if(!n){view.appendChild(el('div','empty-state','Switch to Draw and tap the corners of the house as you walk the perimeter. Tap the orange marker on your first corner to close the shape.'));}
     for(var j=0;j<n;j++){(function(j){
       var cnt=S.openings.filter(function(o){return o.wall===j;}).length;
@@ -2480,31 +2696,79 @@ function render(){
     });
     view.appendChild(cp);
 
-    /* A mailto can carry text and nothing else — no browser will let a page
-       staple a file to it. The share sheet can, so try that first and keep
-       the mail draft as the fallback that always works. */
-    /* Everything here has to get past the frame this app runs inside, which
-       quietly refuses share sheets, pop-ups and downloads. So: several routes
-       out, every failure said out loud rather than swallowed, and a last
-       resort that needs no permission at all. */
+    /* Served from its own address now, not wrapped inside another page, so the
+       phone's share sheet is available and it can carry the sketch as a real
+       attachment. A mailto can only ever carry text — no browser will staple a
+       file to one — so that is the fallback, not the first choice. */
     var row=el('div','sendrow');
-    var copyimg=el('button','primary','Copy drawing');
-    var fullb=el('button','second','Full screen');
-    row.appendChild(copyimg);row.appendChild(fullb);
+    var sendb=el('button','primary','Email it');
+    var copyimg=el('button','second','Copy drawing');
+    row.appendChild(sendb);row.appendChild(copyimg);
     view.appendChild(row);
     var row2=el('div','sendrow');
+    var fullb=el('button','second','Full screen');
     var shotb=el('button','second','Drawing');
-    row2.appendChild(shotb);
+    row2.appendChild(fullb);row2.appendChild(shotb);
     view.appendChild(row2);
-    view.appendChild(el('div','chk',
-      'This page can\u2019t open Mail \u2014 the browser forbids it from a page inside another page, '+
-      'whichever browser you use. Copy the text and the drawing and paste them into a message, '+
-      'or ask Claude for the job by name and it will send the email with the sketch attached.'));
+    view.appendChild(el('div','chk', framedNow()
+      ? 'This copy is running inside another page, which blocks the share sheet. Copy the text and the drawing and paste them into a message instead.'
+      : 'Email it hands the measurements and the sketch to the phone\u2019s share sheet — pick Mail, Messages, wherever. If the phone won\u2019t take the sketch, it falls back to a mail draft with the measurements in it.'));
     var note=el('div','chk','');view.appendChild(note);
     var shot=el('div');shot.id='shotwrap';shot.hidden=true;view.appendChild(shot);
     function tell(msg,bad){note.className='chk'+(bad?' bad':'');note.textContent=msg;}
 
     function subjectName(){var j=cur();return (j&&j.name)||'Field measure';}
+    function safeName(){
+      return (subjectName()||'drawing').replace(/[^\w \-]+/g,'').trim()||'drawing';
+    }
+    /* No share sheet, or it refused: open a mail draft instead. The sketch
+       cannot ride along, so say so plainly rather than let him send a mail
+       that quietly has no picture in it. */
+    function mailFallback(txt,hadFile){
+      var copied=false;
+      try{
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          /* a refused clipboard must not throw past this point — the mail
+             draft still has to open */
+          var pr=navigator.clipboard.writeText(txt);
+          if(pr&&pr.catch)pr.catch(function(){});
+          copied=true;
+        }
+      }catch(e){}
+      var body=(txt.length>1400)
+        ? 'The measurements are on the clipboard \u2014 paste them in here.\n\n'
+        : txt+'\n\n';
+      try{
+        location.href='mailto:?subject='+encodeURIComponent(subjectName()+' \u2014 exterior measure')+
+          '&body='+encodeURIComponent(body);
+      }catch(e){
+        tell('This phone wouldn\u2019t open Mail. Use Copy measurements and paste into a message.',true);
+        return;
+      }
+      tell(hadFile
+        ? ('Mail draft opened with the measurements'+(copied?' (also copied to the clipboard)':'')+
+           '. The sketch can\u2019t ride along in a mail link \u2014 tap Copy drawing, then paste it into the message.')
+        : 'Mail draft opened with the measurements.');
+    }
+    sendb.addEventListener('click',function(){
+      var txt=summaryText(),f=null;
+      try{f=drawingFileNow(safeName());}catch(e){}
+      try{
+        if(f&&navigator.share&&navigator.canShare&&navigator.canShare({files:[f]})){
+          navigator.share({files:[f],title:subjectName(),text:txt}).then(
+            function(){tell('Handed to the share sheet \u2014 the sketch went with it.');
+                       logOut({step:'share',ok:true});},
+            function(err){
+              if(err&&err.name==='AbortError'){tell('Cancelled \u2014 nothing sent.');return;}
+              logOut({step:'share',ok:false,err:(err&&err.name)+':'+(err&&err.message)});
+              mailFallback(txt,!!f);
+            });
+          return;
+        }
+      }catch(e){logOut({step:'share',ok:false,err:String(e&&e.message||e)});}
+      mailFallback(txt,!!f);
+    });
+
     copyimg.addEventListener('click',function(){
       var bl=null;
       try{bl=drawingBlobNow();}catch(e){tell('Couldn\u2019t draw it: '+((e&&e.message)||e),true);return;}
@@ -2537,11 +2801,12 @@ function render(){
       try{img.src=c.toDataURL('image/png');}
       catch(e){shot.appendChild(el('div','cap','Couldn\u2019t turn it into a picture: '+((e&&e.message)||e)));return;}
       shot.appendChild(img);
-      shot.appendChild(el('div','cap','Press and hold to save it \u2014 if nothing comes up, that is this frame blocking it, so use Full screen and take a screenshot.'));
+      shot.appendChild(el('div','cap','Press and hold to save it to Photos.'));
     });
 
     /* The one route nothing can block: fill the screen and let the phone's
-       own screenshot do the work. */
+       own screenshot do the work. This is also the only view where a pinch
+       still zooms, so a crowded sketch can be read on site. */
     fullb.addEventListener('click',function(){
       var c=null;
       try{c=drawingCanvas();}catch(e){tell('Couldn\u2019t draw it: '+((e&&e.message)||e),true);return;}
@@ -2563,8 +2828,8 @@ function render(){
       im.style.transform='translate(-50%,-50%)'+(useTurn?' rotate(90deg)':'');
       stage.appendChild(im);
       ov.appendChild(stage);
-      var cap=el('div','fcap','Take a screenshot now \u2014 side button and volume up'+
-        (useTurn?' (turned sideways to fill the screen)':'')+'. Tap anywhere to close.');
+      var cap=el('div','fcap','Pinch to zoom in. Screenshot with side button and volume up'+
+        (useTurn?' \u2014 turned sideways to fill the screen':'')+'. Tap anywhere to close.');
       ov.appendChild(cap);
       ov.hidden=false;
       ov.onclick=function(){ov.hidden=true;ov.innerHTML='';ov.onclick=null;};
@@ -2584,9 +2849,9 @@ function render(){
   drawShapeBar();
   var anySeg=0,jj=cur();
   (jj&&jj.shapes?jj.shapes:[]).forEach(function(sh){anySeg+=shapeSegs(sh);});
-  var blList=blanks(),cnt={wall:0,opening:0,height:0,gap:0};
+  var blList=blanks(),cnt={wall:0,opening:0,height:0,gap:0,tie:0};
   blList.forEach(function(b){cnt[b.kind]=(cnt[b.kind]||0)+1;});
-  var missWalls=cnt.wall,missO=cnt.opening,missH=cnt.height,missG=cnt.gap;
+  var missWalls=cnt.wall,missO=cnt.opening,missH=cnt.height,missG=cnt.gap,missT=cnt.tie;
   var total=blList.length;
   var st=document.getElementById('status'),stt=document.getElementById('statustext');
   if(!anySeg){st.className='';stt.textContent='Draw the footprint first — tap each corner as you walk.';}
@@ -2596,6 +2861,7 @@ function render(){
     stt.textContent=(blList.length===1&&blList[0])
       ? 'Still blank: '+blList[0].label+'.'
       : total+' still blank — '+[missWalls?missWalls+' wall'+(missWalls>1?'s':''):'',
+          missT?missT+' location'+(missT>1?'s':''):'',
           missO?missO+' opening'+(missO>1?'s':''):'',
           missG?missG+' spacing':'',
           missH?missH+' height'+(missH>1?'s':''):''].filter(Boolean).join(', ')+'.';
@@ -2902,15 +3168,25 @@ document.getElementById('jobbtn').addEventListener('click',openJobs);
 function switchShape(i){save();cur().active=i;intoState();setMode(S.closed?'measure':'draw');render();}
 function addShape(){
   var j=cur(),used=j.shapes.map(function(x){return x.name.toLowerCase();});
-  var guess=['Patio','Deck','Garage','Porch'].filter(function(x){return used.indexOf(x.toLowerCase())<0;})[0]
+  var guess=['Pool','Shed','Patio','Deck','Garage','Porch'].filter(function(x){return used.indexOf(x.toLowerCase())<0;})[0]
             ||('Shape '+(j.shapes.length+1));
   openShapeName(null,guess);
+}
+/* An outline that gets deleted takes its index with it, and any tie pointing
+   at it has to be fixed up or it silently starts naming the wrong outline. */
+function reindexTies(j,removed){
+  (j.shapes||[]).forEach(function(sh){
+    if(!sh.tie)return;
+    var r=tieRefIdx(sh.tie);
+    if(r===removed)delete sh.tie;
+    else if(r>removed)sh.tie.shape=r-1;
+  });
 }
 function openShapeName(sh,guess){
   modal.hidden=false;mbox.innerHTML='';
   mbox.appendChild(el('div','mtitle',sh?'Rename outline':'New outline'));
   var inp=document.createElement('input');
-  inp.type='text';inp.id='jobnameinput';inp.placeholder='e.g. Patio';
+  inp.type='text';inp.id='jobnameinput';inp.placeholder='e.g. Pool';
   inp.value=sh?sh.name:guess;
   mbox.appendChild(inp);
   var row=el('div','crow');
@@ -2935,6 +3211,25 @@ function openShapeMenu(sh,i){
   for(var k=0;k<nseg;k++)if(sh.walls&&sh.walls[k]&&sh.walls[k].len)nd++;
   info.textContent=nseg?nd+' of '+nseg+' walls measured.':'Nothing drawn on this outline yet.';
   mbox.appendChild(info);
+  var jm=cur();
+  if(jm&&needsTie(jm,i)){
+    var tm=tieOf(sh);
+    var loc=el('div','chk',tm&&tm.out&&tm.along
+      ? ('Sits '+showLen(tm.out)+' out from '+tieRefName(jm,tm)+' wall '+(tm.wall+1)+
+         ', '+showLen(tm.along)+' along it.')
+      : 'Not tied to the house yet — without that it can\u2019t be placed in SketchUp.');
+    if(!(tm&&tm.out&&tm.along))loc.className='chk bad';
+    mbox.appendChild(loc);
+    var tb=el('button','mbtn '+((tm&&tm.out&&tm.along)?'msecondary':'mprimary'),
+      (tm&&tm.out&&tm.along)?'Change where it sits':'Set where it sits');
+    tb.addEventListener('click',function(){
+      closeModal();
+      if(cur().active!==i){save();cur().active=i;intoState();render();}
+      var t2=tieOf(cur().shapes[i]);
+      if(t2)askTie(i,tieRefIdx(t2),t2.wall);else openTiePicker(i);
+    });
+    mbox.appendChild(tb);
+  }
   var rn=el('button','mbtn msecondary','Rename');
   rn.addEventListener('click',function(){openShapeName(sh);});
   mbox.appendChild(rn);
@@ -2953,6 +3248,7 @@ function openShapeMenu(sh,i){
       var go=el('button','mbtn mdanger','Delete');
       go.addEventListener('click',function(){
         var j=cur();j.shapes.splice(i,1);
+        reindexTies(j,i);
         if(j.active>=j.shapes.length)j.active=j.shapes.length-1;
         else if(i<j.active)j.active--;
         intoState();closeModal();setMode(S.closed?'measure':'draw');render();
@@ -2971,7 +3267,9 @@ function drawShapeBar(){
   if(!j)return;
   curShape();
   j.shapes.forEach(function(sh,i){
-    var c=el('button','chip'+(i===j.active?' on':''),sh.name);
+    /* a red rim means this outline is drawn but not yet placed */
+    var untied=needsTie(j,i)&&!tieDone(sh)&&shapeSegs(sh)>0;
+    var c=el('button','chip'+(i===j.active?' on':'')+(untied?' untied':''),sh.name);
     c.addEventListener('click',function(){
       if(i===j.active)openShapeMenu(sh,i);else switchShape(i);
     });
