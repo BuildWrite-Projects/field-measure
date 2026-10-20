@@ -958,6 +958,19 @@ function moveCorner(base,i,w){
     var kE=dirOf(nd,base[nni]);
     if(!kE||kE.x*dirOf(base[ni],base[nni]).x+kE.y*dirOf(base[ni],base[nni]).y<0)return;
   }
+  /* A free end of a line still being drawn has no corner beyond it to pin its
+     wall's direction against, so that wall used to swing loose and the shape
+     came out crooked. Slide the free end along the wall's own line instead:
+     the wall keeps the angle it already had, and the end moves the least it
+     can to allow it. Only reachable while the outline is open. */
+  if(!nb&&pi>=0&&uPrev&&ppi<0){
+    var tP=(base[pi].x-C.x)*uPrev.x+(base[pi].y-C.y)*uPrev.y;
+    nb={x:C.x+uPrev.x*tP,y:C.y+uPrev.y*tP};
+  }
+  if(!nd&&ni>=0&&uNext&&nni<0){
+    var tN=(base[ni].x-C.x)*uNext.x+(base[ni].y-C.y)*uNext.y;
+    nd={x:C.x+uNext.x*tN,y:C.y+uNext.y*tN};
+  }
   S.pts[i]=mkPt(i,C.x,C.y);
   if(nb)S.pts[pi]=mkPt(pi,nb.x,nb.y);
   if(nd)S.pts[ni]=mkPt(ni,nd.x,nd.y);
