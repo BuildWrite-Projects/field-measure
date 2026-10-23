@@ -693,6 +693,27 @@ function fit(){
   ctx.setTransform(d,0,0,d,0,0);paint();
 }
 window.addEventListener('resize',fit);
+/* fit() used to run only on a window resize. On iOS the first run happens
+   before the layout has settled — fonts still loading, safe-area insets not
+   yet resolved — so it locked in a canvas bitmap taller than the box it ends
+   up in (623 vs 602 on a 390x844 phone). The browser then squashes the
+   picture to fit, so every wall is DRAWN higher than where the hit test
+   thinks it is, by an amount that grows the further down the canvas you go:
+   ~2px near the top, ~20px at the bottom against a 28px tap tolerance. That
+   is why a jog or a drag on a low wall missed while the same tap up top was
+   fine, and why widening the grab radius never fixed it — the error scales
+   with depth, a wider radius is a constant. Nothing fired a resize, so the
+   bad measurement survived the whole session; rotating the phone cured it.
+   Watching the element itself catches the startup settle AND every in-page
+   layout change (the hint banner growing to two lines, the footer list
+   opening). Setting cv.width/height does not change the element's CSS box,
+   so this cannot feed back on itself. */
+if(window.ResizeObserver){
+  try{ new ResizeObserver(fit).observe(cv); }catch(e){}
+}else{
+  /* no ResizeObserver: re-measure a few times while the layout settles */
+  [60,250,600,1200].forEach(function(ms){setTimeout(fit,ms);});
+}
 if(window.matchMedia)try{window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',paint);}catch(e){}
 
 function ptOn(i,t){var s=seg(i);return{x:s[0].x+t*(s[1].x-s[0].x),y:s[0].y+t*(s[1].y-s[0].y)};}
