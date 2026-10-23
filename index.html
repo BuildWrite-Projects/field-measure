@@ -903,14 +903,34 @@ function hitOpening(p){
   }
   return best;
 }
-function hitCorner(p){
-  var best=-1,bd=22;
+function hitCorner(p,rad){
+  var best=-1,bd=rad||22;
   for(var i=0;i<S.pts.length;i++){
     var q=W2S(S.pts[i]),d=Math.hypot(p.x-q.x,p.y-q.y);
     if(d<bd){bd=d;best=i;}
   }
   return best;
 }
+/* How far the nearest corner is, in screen pixels. */
+function cornerDist(p){
+  var bd=Infinity;
+  for(var i=0;i<S.pts.length;i++){
+    var q=W2S(S.pts[i]),d=Math.hypot(p.x-q.x,p.y-q.y);
+    if(d<bd)bd=d;
+  }
+  return bd;
+}
+/* Picking corners for Align is forgiving, because the cost of missing used
+   to be the whole selection. A tap within ALIGN_GRAB picks or unpicks; one
+   beyond ALIGN_CLEAR of every corner is a deliberate tap on open paper and
+   lets the selection go; in between, nothing happens at all, so a fumbled
+   pick costs one tap rather than the run you had picked out. */
+var ALIGN_GRAB=38, ALIGN_CLEAR=76;
+/* Grabbing a corner to drag it. Wider than it was, because on a phone the
+   finger covers the corner it is reaching for. Kept well below ALIGN_GRAB:
+   every pixel added here is a pixel where a drag meant to pan the paper
+   picks up a corner instead. */
+var DRAG_GRAB=32;
 /* Grade is stored on the corner point. Several edits replace point objects
    outright, so they rebuild them through here and the reading comes along. */
 function mkPt(i,x,y){
@@ -1180,11 +1200,15 @@ function tap(p){
     render();return;
   }
   if(alignOn){
-    var ci=hitCorner(p);
-    if(ci<0){alignOn=false;alignSel=[];render();return;}  /* tap open paper to let them go */
-    var at=alignSel.indexOf(ci);
-    if(at>=0)alignSel.splice(at,1);else alignSel.push(ci);
-    render();return;
+    var ci=hitCorner(p,ALIGN_GRAB);
+    if(ci>=0){
+      var at=alignSel.indexOf(ci);
+      if(at>=0)alignSel.splice(at,1);else alignSel.push(ci);
+      render();return;
+    }
+    /* Well clear of every corner: that is a deliberate tap on open paper. */
+    if(cornerDist(p)>ALIGN_CLEAR){alignOn=false;alignSel=[];render();return;}
+    return;                      /* a near miss costs nothing */
   }
   if(S.mode==='draw'){
     if(S.closed){clearPicks();return;}
@@ -1478,7 +1502,8 @@ cv.addEventListener('pointerdown',function(e){
   if(k.length===1){
     startPt={x:e.clientX,y:e.clientY};moved=false;dragLive=false;
     var r0=cv.getBoundingClientRect();
-    var hc=hitCorner({x:e.clientX-r0.left,y:e.clientY-r0.top});
+    var hc=hitCorner({x:e.clientX-r0.left,y:e.clientY-r0.top},
+                     alignOn?ALIGN_GRAB:DRAG_GRAB);
     grpIdx=-1;
     if(alignOn&&alignSel.length>=2&&hc>=0&&alignSel.indexOf(hc)>=0)grpIdx=hc;
     dragIdx=(S.locked||S.mode==='open'||alignOn||jogOn||cutOn||eraseOn)?-1:hc;
