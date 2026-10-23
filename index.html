@@ -1195,8 +1195,15 @@ function tap(p){
   }
   if(jogOn){
     var hj=hitWall(p);
-    if(!hj)return;
+    /* Both of these used to do nothing at all — no message, the button still
+       armed, the hint still saying "tap the wall". Indistinguishable from the
+       app being broken, so say which it is and leave Jog armed to try again. */
+    if(!hj){
+      say('That didn’t land on a wall. Tap the wall itself, or tap Jog again to put it away.');
+      render();return;
+    }
     if(insertJog(hj.wall,hj.t,jogDir))jogOn=false;
+    else say('That wall is too short to take a jog. Put it on a longer wall, or drag a corner to stretch this one first.');
     render();return;
   }
   if(alignOn){
