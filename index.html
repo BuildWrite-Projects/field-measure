@@ -98,7 +98,16 @@ header h1{font-family:var(--display);font-size:21px;letter-spacing:.06em;text-tr
 .chip.add{color:var(--accent);border-color:var(--accent);background:none;font-weight:700}
 .chip.untied{border-color:var(--miss);color:var(--miss)}
 .chip.on.untied{background:var(--ink);color:var(--bg);border-color:var(--miss)}
-#hint{flex:0 0 auto;background:var(--surface-2);color:var(--ink-2);font-size:12px;line-height:1.35;padding:7px 16px;border-bottom:1px solid var(--line)}
+/* The hint bar carries the snap setting as well as the hint text. It lives
+   above the drawing rather than on top of it, so the chip is reachable in
+   every mode and costs no drawing surface. */
+#hint{flex:0 0 auto;display:flex;align-items:center;gap:10px;
+  background:var(--surface-2);color:var(--ink-2);font-size:12px;line-height:1.35;
+  padding:6px 10px 6px 16px;border-bottom:1px solid var(--line)}
+#hinttext{flex:1 1 auto;min-width:0}
+#hint #snap{flex:0 0 auto;padding:5px 12px;font-size:12.5px}
+/* plain chip would be the same colour as the bar it sits in */
+#hint #snap:not(.on){background:var(--surface)}
 
 #stage{position:relative;flex:1 1 auto;min-height:0}
 canvas{display:block;width:100%;height:100%;touch-action:none}
@@ -251,7 +260,7 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
     <button class="mode" data-mode="open" aria-pressed="false">Openings</button>
   </div>
   <div id="shapebar"></div>
-  <div id="hint"></div>
+  <div id="hint"><span id="hinttext"></span><button class="chip" id="snap">90&deg;</button></div>
 
   <div id="stage">
     <canvas id="c"></canvas>
@@ -262,7 +271,6 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
       <button class="sbtn" id="redo" hidden>Redo</button>
     </div>
     <div id="tools" hidden>
-      <button class="chip" id="snap">90&deg;</button>
       <button class="chip" id="close" hidden>Close shape</button>
       <button class="chip" id="align">Align</button>
       <button class="chip" id="jog">Jog</button>
@@ -2920,7 +2928,10 @@ function render(){
     b.textContent=label;
     b.className='chip'+(on?' on':'');
   }
-  tool('snap',false,SNAPLABEL[S.snap],true);
+  /* Highlighted whenever it is not on 90 degrees, so a setting that will
+     let the shape come out crooked is visible rather than something you
+     have to go looking for. */
+  tool('snap',S.snap!==90,SNAPLABEL[S.snap],true);
   tool('close',false,'Close shape',S.pts.length>2&&!S.closed);
   tool('align',alignOn,alignOn?(alignSel.length>=2?'Line up '+alignSel.length:'Cancel'):'Align',
        S.closed&&S.pts.length>2);
@@ -2928,7 +2939,7 @@ function render(){
   tool('cut',cutOn,cutOn?(cutPicks.length===0?'Pick a corner'
         :(cutPicks.length===1?'Pick a wall':'Make it 45\u00b0')):'45\u00b0 cut',segCount()>2);
   tool('erase',eraseOn,eraseOn?'Pick a wall':'Erase wall',S.pts.length>4);
-  document.getElementById('hint').textContent=hintText();
+  document.getElementById('hinttext').textContent=hintText();
   var jb=document.getElementById('jobbtn');if(cur())jb.textContent=cur().name;
   save();paint();
 }
