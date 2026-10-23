@@ -446,6 +446,17 @@ function intoState(){
   V=j.view||{ox:0,oy:0,s:1};
   hist=[];future=[];lastWall=-1;measHist=[];alignGroups=[];
 }
+/* Re-point the live state at the current outline's arrays WITHOUT throwing
+   away the undo history. The housekeeping pass in render() welds corners
+   that have landed on top of each other, and it used to call intoState for
+   this — which cleared the history, so whatever caused the weld could no
+   longer be undone and a damaged drawing was permanent. Switching jobs or
+   outlines still uses intoState: there, starting clean is correct. */
+function resyncShape(){
+  var sh=curShape();if(!sh)return;
+  S.pts=sh.pts||(sh.pts=[]);S.closed=!!sh.closed;
+  S.walls=sh.walls||(sh.walls=[]);S.openings=sh.openings||(sh.openings=[]);
+}
 function save(){
   var j=cur(),sh=curShape();if(!j||!sh)return;
   sh.pts=S.pts;sh.closed=S.closed;sh.walls=S.walls;sh.openings=S.openings;
@@ -1316,6 +1327,34 @@ function solveLin(Mx,rhs){
 /* Every alignment already made on this outline stays in force, so lining up
    the jog faces can't quietly undo the base wall you straightened first. */
 var alignGroups=[];
+function ringArea(pts){
+  var a=0;
+  for(var i=0;i<pts.length;i++){
+    var p=pts[i],q=pts[(i+1)%pts.length];
+    a+=p.x*q.y-q.x*p.y;
+  }
+  return Math.abs(a/2);
+}
+/* A least-squares fit meets the constraints by whatever means the arithmetic
+   allows, and folding the outline flat is one of them: pick three corners of
+   a rectangle and there IS an exact answer with the whole house lying on one
+   line. The sums are right and the drawing is destroyed — walls collapse to
+   nothing, the cleanup then deletes those corners and the lengths written on
+   them. So before committing a solve, check the answer is still a building. */
+function solveSane(x,N){
+  var out=[],i;
+  for(i=0;i<N;i++)out.push({x:x[2*i],y:x[2*i+1]});
+  var M=S.closed?N:N-1;
+  for(i=0;i<M;i++){
+    var a=out[i],b=out[(i+1)%N];
+    if(Math.hypot(b.x-a.x,b.y-a.y)<3)return false;   /* a wall vanished */
+  }
+  if(S.closed&&N>2){
+    var was=ringArea(S.pts),now=ringArea(out);
+    if(was>1&&now<was*0.25)return false;             /* the outline folded up */
+  }
+  return true;
+}
 /* The one solver. Hand it a list of linear constraints on the corner
    positions and it returns the shape closest to what's drawn that satisfies
    them all. Align and Force 45 both just build different constraints. */
@@ -1350,6 +1389,7 @@ function runSolve(rows){
     rows[i].c.forEach(function(e){x[e[0]]+=e[1]*lam[i];});
   }
   for(i=0;i<2*N;i++)if(!isFinite(x[i]))return false;
+  if(!solveSane(x,N))return false;
   for(i=0;i<N;i++){S.pts[i]=mkPt(i,x[2*i],x[2*i+1]);}
   return true;
 }
@@ -1424,7 +1464,7 @@ function alignSet(sel){
   snapshot();
   if(!alignSolve(sel,axis,target)){
     if(hist.length)hist.pop();
-    say('Those corners can’t all sit on one line without bending a wall. Try picking fewer, or the ones along a single run.');
+    say('Those corners can’t all sit on one line without folding the shape flat. Pick fewer — the two ends of one wall always works.');
   }
 }
 function ids(){return Object.keys(ptrs);}
@@ -2864,7 +2904,7 @@ function render(){
       var m=shapeSegs(sh);
       if(sh.openings)sh.openings=sh.openings.filter(function(o){return o.wall<m;});
     });
-    if(fixed)intoState();
+    if(fixed)resyncShape();
     if(S.openings)S.openings=S.openings.filter(function(o){return o.wall<segCount();});
   })();
   drawShapeBar();
