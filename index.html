@@ -272,10 +272,13 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
     </div>
     <div id="tools" hidden>
       <button class="chip" id="close" hidden>Close shape</button>
-      <button class="chip" id="align">Align</button>
       <button class="chip" id="jog">Jog</button>
       <button class="chip" id="cut">45&deg; cut</button>
       <button class="chip" id="erase">Erase wall</button>
+      <!-- Align sits last because it is the one that comes and goes as the
+           drawing grows. Anywhere earlier and its arrival shoves every other
+           button sideways while you are reaching for one. -->
+      <button class="chip" id="align">Align</button>
     </div>
 
   <div id="panel">
@@ -2973,12 +2976,17 @@ function render(){
      have to go looking for. */
   tool('snap',S.snap!==90,SNAPLABEL[S.snap],true);
   tool('close',false,'Close shape',S.pts.length>2&&!S.closed);
-  tool('align',alignOn,alignOn?(alignSel.length>=2?'Line up '+alignSel.length:'Cancel'):'Align',
-       S.closed&&S.pts.length>2);
   tool('jog',jogOn,jogOn?(jogDir>0?'Jog in':'Jog out'):'Jog',segCount()>0);
   tool('cut',cutOn,cutOn?(cutPicks.length===0?'Pick a corner'
         :(cutPicks.length===1?'Pick a wall':'Make it 45\u00b0')):'45\u00b0 cut',segCount()>2);
   tool('erase',eraseOn,eraseOn?'Pick a wall':'Erase wall',S.pts.length>4);
+  /* Three corners is the whole requirement: two to line up and a third for
+     the run to mean anything. It used to wait for the outline to be closed,
+     which stopped you straightening a wall as you walked it. Nothing under
+     here needed the shape closed \u2014 an open run has no enclosed area to fold,
+     so it is the safer of the two cases. */
+  tool('align',alignOn,alignOn?(alignSel.length>=2?'Line up '+alignSel.length:'Cancel'):'Align',
+       S.pts.length>2);
   document.getElementById('hinttext').textContent=hintText();
   var jb=document.getElementById('jobbtn');if(cur())jb.textContent=cur().name;
   save();paint();
