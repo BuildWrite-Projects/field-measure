@@ -223,6 +223,25 @@ pre#sumtext{font-family:var(--num);font-size:12.5px;line-height:1.6;white-space:
 #spanview[hidden]{display:none!important}
 #spanview svg{display:block;width:100%;height:auto}
 #spanview .cap{font-family:var(--body);font-size:11.5px;color:var(--ink-2);padding-top:3px}
+#tiltbox[hidden]{display:none!important}
+#tiltbox{display:flex;flex-direction:column;gap:8px;
+  border:1px solid var(--line);border-radius:11px;padding:11px;background:var(--surface-2)}
+.tiltnote{font-family:var(--body);font-size:12.5px;line-height:1.45;color:var(--ink-2)}
+.tiltnote.bad{color:var(--miss)}
+.tiltbtn{background:var(--ink);color:var(--bg);border:none;border-radius:9px;padding:12px;
+  font-family:var(--display);font-size:16px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+.tiltread{text-align:center;padding:2px 0 0}
+.tiltread .big{font-family:var(--num);font-size:34px;font-weight:600;line-height:1.1;
+  font-variant-numeric:tabular-nums;color:var(--accent)}
+.tiltread .deg{font-family:var(--num);font-size:15px;font-weight:600;color:var(--ink-2)}
+.tiltread .near{font-family:var(--body);font-size:12.5px;color:var(--ink-2);padding-top:3px}
+.tiltread.unsteady .big{color:var(--ink-2)}
+.tiltacts{display:flex;gap:8px}
+.tiltacts button{flex:1;border:none;border-radius:9px;padding:12px 6px;
+  font-family:var(--display);font-size:15px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+.tiltuse{background:var(--accent);color:var(--accent-ink)}
+.tiltuse:disabled{opacity:.45}
+.tiltstop{background:var(--surface);color:var(--ink-2);border:1px solid var(--line)}
 .slot{display:flex;flex-direction:column;gap:5px}
 .slotname{font-family:var(--display);font-size:13px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-2);font-weight:600}
 .boxes{display:flex;gap:7px}
@@ -309,6 +328,7 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
     <div id="sheetbox">
       <div id="sheettitle"></div>
       <div id="spanview" hidden></div>
+      <div id="tiltbox" hidden></div>
       <div id="kinds"></div>
       <div id="flagrow" hidden></div>
       <div id="fields"></div>
@@ -1802,6 +1822,139 @@ function drawFields(){
   });
 }
 var SHremove=null;
+/* ---------- reading a roof pitch off the phone ----------
+   At rest the accelerometer reports one thing: which way gravity pulls. Lay
+   the phone flat on a roof plane and the angle between the screen and that
+   pull IS the slope of the plane. Only the component along the screen's own
+   normal matters, so it reads the same whichever way round the phone is set
+   down on the slope — no need to line it up with anything.
+   Rise over 12 is then 12*tan(angle). */
+var TILT={live:false,handler:null,buf:[],timer:null,shown:0};
+function tiltFromGravity(g){
+  var m=Math.sqrt(g.x*g.x+g.y*g.y+g.z*g.z);
+  if(!m)return null;
+  return{deg:Math.acos(Math.min(1,Math.abs(g.z)/m))*180/Math.PI,
+    /* gravity alone is about 9.81; much more or less means the phone is
+       being moved, and the reading is of the movement, not the roof */
+    steady:Math.abs(m-9.81)<1.2};
+}
+function pitchOver12(deg){return 12*Math.tan(deg*Math.PI/180);}
+function nearestStdPitch(r){
+  var best=null;
+  for(var s=1;s<=18;s++){var d=Math.abs(s-r);if(!best||d<best.d)best={s:s,d:d};}
+  return best;
+}
+function tiltStop(){
+  if(TILT.handler){window.removeEventListener('devicemotion',TILT.handler);TILT.handler=null;}
+  if(TILT.timer){clearInterval(TILT.timer);TILT.timer=null;}
+  TILT.live=false;TILT.buf=[];
+}
+/* The median of the steady readings from the last second and a half. A median
+   rather than a mean so one jolt as the finger comes down cannot drag it.
+   Per-sample steadiness is not enough on its own: a phone being waved about
+   passes through 9.81 twice a swing, and those moments look still. So the
+   recent readings must also agree with each other before this returns
+   anything at all. */
+function tiltSettled(){
+  var now=Date.now();
+  var v=TILT.buf.filter(function(s){return s.steady&&now-s.t<1500;})
+                .map(function(s){return s.deg;}).sort(function(a,b){return a-b;});
+  if(v.length<8)return null;
+  if(v[v.length-1]-v[0]>2)return null;      /* still moving */
+  var m=v.length>>1;
+  return v.length%2?v[m]:(v[m-1]+v[m])/2;
+}
+function buildTilt(box,onUse){
+  tiltStop();
+  box.innerHTML='';
+  var note=el('div','tiltnote',
+    'Lay the phone flat on the roof plane — the rake board, a rafter in the attic, or the deck itself — and hold it still.');
+  var btn=el('button','tiltbtn','Measure with the phone');
+  var read=el('div','tiltread');read.hidden=true;
+  var acts=el('div','tiltacts');acts.hidden=true;
+  var useb=el('button','tiltuse','Use this reading');
+  var stopb=el('button','tiltstop','Stop');
+  acts.appendChild(useb);acts.appendChild(stopb);
+  box.appendChild(note);box.appendChild(btn);box.appendChild(read);box.appendChild(acts);
+
+  function fail(msg){
+    tiltStop();
+    note.className='tiltnote bad';note.textContent=msg;
+    btn.hidden=false;read.hidden=true;acts.hidden=true;
+  }
+  function paint(){
+    if(!TILT.buf.length){read.innerHTML='<div class="deg">waiting for the phone…</div>';
+      useb.disabled=true;return;}
+    /* Show the settled figure, not the latest raw sample — otherwise the
+       number flickers through every tenth of a degree while you read it. */
+    var settled=tiltSettled();
+    var deg=(settled===null)?TILT.buf[TILT.buf.length-1].deg:settled;
+    var r=pitchOver12(deg), st=nearestStdPitch(r);
+    read.className='tiltread'+(settled===null?' unsteady':'');
+    read.innerHTML='';
+    read.appendChild(el('div','big',r.toFixed(1)+' / 12'));
+    read.appendChild(el('div','deg',deg.toFixed(1)+'°'));
+    read.appendChild(el('div','near',settled===null
+      ? 'hold still — the phone is moving'
+      : (st.d<0.2?('reads as a standard '+st.s+'/12'):('nearest standard is '+st.s+'/12'))));
+    useb.disabled=(settled===null);
+  }
+  function begin(){
+    note.className='tiltnote';
+    note.textContent='Lay it flat on the slope and hold still. The reading settles in about a second.';
+    btn.hidden=true;read.hidden=false;acts.hidden=false;
+    TILT.live=true;TILT.buf=[];
+    TILT.handler=function(e){
+      var g=e.accelerationIncludingGravity;
+      if(!g||g.x===null||g.x===undefined)return;
+      var t=tiltFromGravity(g);
+      if(!t)return;
+      TILT.buf.push({deg:t.deg,steady:t.steady,t:Date.now()});
+      if(TILT.buf.length>240)TILT.buf.shift();
+    };
+    window.addEventListener('devicemotion',TILT.handler);
+    TILT.timer=setInterval(function(){
+      paint();
+      /* nothing at all after a couple of seconds means no usable sensor */
+      if(!TILT.buf.length&&Date.now()-TILT.shown>2500)
+        fail('This phone isn’t reporting any tilt. Enter the pitch by hand below.');
+    },100);
+    paint();
+  }
+  btn.addEventListener('click',function(){
+    TILT.shown=Date.now();
+    if(typeof DeviceMotionEvent==='undefined')
+      return fail('This browser has no motion sensor. Enter the pitch by hand below.');
+    if(!window.isSecureContext)
+      return fail('Motion sensors only work over a secure connection. Open the app from its https address.');
+    /* iOS makes you ask, and only from inside a tap like this one. */
+    if(typeof DeviceMotionEvent.requestPermission==='function'){
+      DeviceMotionEvent.requestPermission().then(function(state){
+        if(state==='granted')begin();
+        else fail('Motion access was turned down. Allow it in Settings › Apps › Safari › Motion & Orientation Access, then try again.');
+      }).catch(function(){
+        fail('This phone wouldn’t hand over motion access. Enter the pitch by hand below.');
+      });
+      return;
+    }
+    begin();
+  });
+  stopb.addEventListener('click',function(){
+    tiltStop();
+    note.className='tiltnote';
+    note.textContent='Lay the phone flat on the roof plane — the rake board, a rafter in the attic, or the deck itself — and hold it still.';
+    btn.hidden=false;read.hidden=true;acts.hidden=true;
+  });
+  useb.addEventListener('click',function(){
+    var d=tiltSettled();
+    if(d===null)return;
+    onUse(pitchOver12(d).toFixed(1)+'/12');
+    tiltStop();
+    note.className='tiltnote';
+    note.textContent='Reading taken. Tap a standard pitch below to round it, or Save as it is.';
+    btn.hidden=false;read.hidden=true;acts.hidden=true;
+  });
+}
 function openSheet(cfg){
   SH={fields:cfg.fields.map(function(f){
         if(f.type==='pitch')return{label:f.label,type:'pitch',raw:f.value||''};
@@ -1825,6 +1978,9 @@ function openSheet(cfg){
   var sv=document.getElementById('spanview');
   if(cfg.diagram){sv.innerHTML=cfg.diagram;sv.hidden=false;}
   else{sv.innerHTML='';sv.hidden=true;}
+  var tb=document.getElementById('tiltbox');
+  if(cfg.tilt){tb.hidden=false;buildTilt(tb,cfg.tilt);}
+  else{tiltStop();tb.innerHTML='';tb.hidden=true;}
   var fr=document.getElementById('flagrow');
   fr.innerHTML='';fr.hidden=!cfg.flag;
   if(cfg.flag){
@@ -1842,7 +1998,9 @@ function openSheet(cfg){
   rb.textContent=cfg.removeLabel||'Remove this opening';
   sheet.hidden=false;
 }
-function closeSheet(){sheet.hidden=true;SH=null;SHremove=null;}
+/* tiltStop here matters: the sensor must not keep running once the sheet is
+   gone, or it drains the battery in a pocket all afternoon. */
+function closeSheet(){tiltStop();sheet.hidden=true;SH=null;SHremove=null;}
 document.getElementById('save').addEventListener('click',function(){
   if(!SH)return;var f=SH.fields,d=SH.done;closeSheet();
   d(f.map(fieldText));
@@ -1971,6 +2129,10 @@ function askHeight(name){
   SHremove=null;
   var pitch=(name==='Roof pitch');
   openSheet({title:name,pitch:pitch,
+    tilt:pitch?function(v){
+      if(!SH)return;
+      SH.fields[0].raw=v;SH.active=0;drawFields();
+    }:null,
     fields:[{label:pitch?'Rise over 12':'Measurement',type:pitch?'pitch':'dim',value:S.heights[name]||''}],
     done:function(v){
       var was=S.heights[name];
