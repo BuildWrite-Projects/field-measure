@@ -414,11 +414,53 @@ function kindGlyph(k){for(var i=0;i<KINDS.length;i++)if(KINDS[i][0]===k)return K
 var HEIGHTS=[
   {k:'Floor-to-floor',note:'foundation top to first floor, then floor to floor'},
   {k:'Eave height',note:'from top of foundation'},
-  {k:'Ridge height',note:'from top of foundation'},
+  {k:'Main ridge',note:'from top of foundation'},
   {k:'Roof pitch',note:null},
-  {k:'Overhang depth',note:null}
+  {k:'Soffit depth',note:'how far the roof runs out past the eave wall'},
+  {k:'Rake overhang',note:'how far it runs out past the gable wall'}
 ];
 function heightNote(k){for(var i=0;i<HEIGHTS.length;i++)if(HEIGHTS[i].k===k)return HEIGHTS[i].note;return null;}
+/* These two were called something else before. The name is also the storage
+   key, so a rename on its own would orphan every height already measured.
+   Carry the old value across, once, and leave the old key behind. */
+var HEIGHT_RENAMES={'Ridge height':'Main ridge','Overhang depth':'Soffit depth'};
+function migrateJob(j){
+  if(!j)return;
+  var h=j.heights||(j.heights={});
+  for(var old in HEIGHT_RENAMES){
+    var now=HEIGHT_RENAMES[old];
+    if(h[old]!==undefined){
+      if(h[now]===undefined||h[now]==='')h[now]=h[old];
+      delete h[old];
+    }
+  }
+  if(!j.ridges)j.ridges=[];
+  if(!j.heightsOff)j.heightsOff={};
+}
+function migrateAll(db){
+  if(db&&db.jobs)db.jobs.forEach(migrateJob);
+}
+/* A height the house simply does not have — no rake on a hip roof, no soffit
+   on a flush eave. Switched off it stops being counted as missing and reads
+   "n/a" everywhere instead of a blank waiting to be filled. */
+function heightOff(k){var j=cur();return !!(j&&j.heightsOff&&j.heightsOff[k]);}
+function setHeightOff(k,v){
+  var j=cur();if(!j)return;
+  if(!j.heightsOff)j.heightsOff={};
+  if(v){j.heightsOff[k]=true;delete j.heights[k];}
+  else delete j.heightsOff[k];
+}
+/* Extra roof masses: a wing, a garage, a cross gable. Each carries its own
+   ridge height and its own pitch, because one number cannot be built from. */
+function ridges(){var j=cur();if(!j)return[];if(!j.ridges)j.ridges=[];return j.ridges;}
+function ridgeBlanks(){
+  var out=[];
+  ridges().forEach(function(r,i){
+    if(!r.h)out.push({kind:'ridge',idx:i,field:'h',label:'the ridge height on '+r.name});
+    if(!r.pitch)out.push({kind:'ridge',idx:i,field:'pitch',label:'the pitch on '+r.name});
+  });
+  return out;
+}
 var S={pts:[],closed:false,walls:[],openings:[],heights:{},mode:'draw',tab:'walls',snap:90};
 var hist=[],future=[];
 var V={ox:0,oy:0,s:1};
@@ -497,6 +539,7 @@ function withShape(sh,fn){
   return r;
 }
 readDB();
+migrateAll(DB);   /* rename old height keys before anything reads them */
 
 /* Where measurements live is storage.js's business, not this file's.
    localStorage keeps the app instant and usable with no signal; the database
@@ -523,7 +566,7 @@ function initCloud(){
         return (j.shapes||[]).some(function(sh){return sh.pts&&sh.pts.length;})||(j.pts&&j.pts.length);
       });
       if(theirs>mine||!mineHasWork){
-        DB=rem;
+        DB=rem;migrateAll(DB);
         try{localStorage.setItem(KEY,JSON.stringify(DB));}catch(e){}
         intoState();setMode(S.closed?'measure':'draw');fitView();render();
       }
@@ -2128,17 +2171,82 @@ function askGap(w,row){
 function askHeight(name){
   SHremove=null;
   var pitch=(name==='Roof pitch');
+  var off=heightOff(name);
   openSheet({title:name,pitch:pitch,
     tilt:pitch?function(v){
       if(!SH)return;
       SH.fields[0].raw=v;SH.active=0;drawFields();
     }:null,
+    flag:{label:'Not on this house',value:off,onPick:function(v){off=v;}},
     fields:[{label:pitch?'Rise over 12':'Measurement',type:pitch?'pitch':'dim',value:S.heights[name]||''}],
     done:function(v){
-      var was=S.heights[name];
-      recordMeas(function(){S.heights[name]=was;},lastWall);
-      S.heights[name]=v[0];render();
+      var was=S.heights[name],wasOff=heightOff(name);
+      recordMeas(function(){
+        S.heights[name]=was;setHeightOff(name,wasOff);
+      },lastWall);
+      /* Switching it off clears the number with it — a measurement for
+         something the house hasn't got would only confuse the summary. */
+      if(off)setHeightOff(name,true);
+      else{setHeightOff(name,false);S.heights[name]=v[0];}
+      render();
     }});
+}
+/* An extra roof mass: its own ridge height and its own pitch. */
+function askRidge(i,field){
+  var r=ridges()[i];if(!r)return;
+  var pitch=(field==='pitch');
+  SHremove=function(){
+    confirmBox('Remove '+r.name,
+      'That takes away its ridge height and pitch. The rest of the job stays as it is.',
+      'Remove it',function(){
+        var a=ridges();if(a[i])a.splice(i,1);
+        render();
+      });
+    closeSheet();
+  };
+  openSheet({title:r.name+(pitch?' — pitch':' — ridge height'),pitch:pitch,
+    removeLabel:'Remove this roof',
+    tilt:pitch?function(v){
+      if(!SH)return;
+      SH.fields[0].raw=v;SH.active=0;drawFields();
+    }:null,
+    fields:[{label:pitch?'Rise over 12':'From top of foundation',
+             type:pitch?'pitch':'dim',value:(pitch?r.pitch:r.h)||''}],
+    done:function(v){
+      var was=pitch?r.pitch:r.h;
+      recordMeas(function(){if(pitch)r.pitch=was;else r.h=was;},lastWall);
+      if(pitch)r.pitch=v[0];else r.h=v[0];
+      render();
+    }});
+}
+function addRidge(){
+  var used=ridges().map(function(r){return r.name.toLowerCase();});
+  var guess=['Garage','Front gable','Wing','Porch','Dormer','Addition']
+    .filter(function(x){return used.indexOf(x.toLowerCase())<0;})[0]
+    ||('Roof '+(ridges().length+2));
+  openRidgeName(null,guess);
+}
+function openRidgeName(r,guess){
+  modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',r?'Rename roof':'Another roof'));
+  mbox.appendChild(el('div','chk',
+    'A wing, a garage, a cross gable — anything with a ridge of its own. Name it so you can tell them apart back at the desk.'));
+  var inp=document.createElement('input');
+  inp.type='text';inp.id='jobnameinput';inp.placeholder='e.g. Garage';
+  inp.value=r?r.name:guess;
+  mbox.appendChild(inp);
+  var row=el('div','crow');
+  var no=el('button','mbtn msecondary','Cancel');
+  no.addEventListener('click',function(){closeModal();render();});
+  var ok=el('button','mbtn mprimary',r?'Save name':'Add it');
+  ok.addEventListener('click',function(){
+    var nm=(inp.value||'').trim()||(r?r.name:guess);
+    if(r)r.name=nm;
+    else ridges().push({name:nm,h:'',pitch:''});
+    closeModal();render();
+  });
+  row.appendChild(no);row.appendChild(ok);mbox.appendChild(row);
+  setTimeout(function(){try{inp.focus();inp.select();}catch(e){}},60);
 }
 /* Pick which wall the pool, shed or patio was measured off. */
 function openTiePicker(si){
@@ -2262,7 +2370,11 @@ function blanks(){
       }
     });
   });
-  HEIGHTS.forEach(function(h){if(!S.heights[h.k])hts.push({kind:'height',label:h.k});});
+  HEIGHTS.forEach(function(h){
+    if(heightOff(h.k))return;              /* the house hasn't got one */
+    if(!S.heights[h.k])hts.push({kind:'height',label:h.k});
+  });
+  hts=hts.concat(ridgeBlanks());
   return walls.concat(ties,hts,opens,gaps);
 }
 var flashAt=null,flashEnd=0,flashTimer=null;
@@ -2327,6 +2439,12 @@ function goToBlank(){
     openTab('heights');
     render();
     askHeight(b.label);
+    return;
+  }
+  if(b.kind==='ridge'){
+    openTab('heights');
+    render();
+    askRidge(b.idx,b.field);
     return;
   }
   if(b.kind==='tie'){
@@ -2614,7 +2732,7 @@ function gradeFlags(){
 /* Eave plus half the span at the pitch you noted should land near the ridge.
    Plenty of honest reasons it won't, so this only ever murmurs. */
 function roofCheck(){
-  var h=S.heights||{},eave=dim16(h['Eave height']),ridge=dim16(h['Ridge height']);
+  var h=S.heights||{},eave=dim16(h['Eave height']),ridge=dim16(h['Main ridge']);
   var p=h['Roof pitch'];
   if(!eave||!ridge||!p)return null;
   var m=String(p).match(/(\d+(?:\.\d+)?)/);
@@ -2798,8 +2916,16 @@ function openReview(){
 
   sec('Heights');
   HEIGHTS.forEach(function(h){
+    if(heightOff(h.k)){line(h.k,'n/a','not on this house');return;}
     line(h.k,(h.k==='Roof pitch'?(S.heights[h.k]||''):showLen(S.heights[h.k])),h.note);
   });
+  if(ridges().length){
+    sec('Other roofs');
+    ridges().forEach(function(r){
+      line(r.name,showLen(r.h),'ridge height from top of foundation');
+      line('',r.pitch||'','pitch');
+    });
+  }
   var rc=roofCheck();
   if(rc)box.appendChild(el('div','rvnote',
     'Eave plus half the '+fmt16(Math.round(rc.span))+' span at that pitch predicts a ridge of '+
@@ -2870,9 +2996,19 @@ function summaryText(){
   out.push('HEIGHTS');
   out.push('  (all measured from top of foundation, which runs level)');
   HEIGHTS.forEach(function(h){
+    if(heightOff(h.k)){out.push('  '+h.k+'  n/a — not on this house');return;}
     var v=(h.k==='Roof pitch')?(S.heights[h.k]||''):showLen(S.heights[h.k]);
     out.push('  '+h.k+'  '+(v||'— MISSING —'));
   });
+  if(ridges().length){
+    out.push('');
+    out.push('OTHER ROOFS');
+    ridges().forEach(function(r){
+      out.push('  '+r.name.toUpperCase());
+      out.push('    Ridge height  '+(showLen(r.h)||'— MISSING —'));
+      out.push('    Pitch         '+(r.pitch||'— MISSING —'));
+    });
+  }
   return out.join('\n');
 }
 var LOCK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 10.9V7.9a3.5 3.5 0 0 1 7 0v3"/><rect x="5.1" y="10.9" width="13.8" height="9.3" rx="1.7"/><circle cx="12" cy="15.5" r="1.15" fill="currentColor" stroke="none"/></svg>';
@@ -2945,13 +3081,47 @@ function render(){
       }
     });
   }else if(S.tab==='heights'){
-    var hd=HEIGHTS.filter(function(h){return S.heights[h.k];}).length;
-    view.appendChild(el('div','tally'+(hd===HEIGHTS.length?' done':''),hd+' of '+HEIGHTS.length+' captured'+(hd===HEIGHTS.length?'  ✓':'')));
-    view.appendChild(el('div','chk','Top of foundation is the datum — it runs level, so these stay single numbers.'));
+    /* Anything switched off counts as dealt with, not as missing. */
+    var wanted=HEIGHTS.filter(function(h){return !heightOff(h.k);});
+    var hd=wanted.filter(function(h){return S.heights[h.k];}).length;
+    var rb=ridgeBlanks().length;
+    var allDone=(hd===wanted.length&&!rb);
+    view.appendChild(el('div','tally'+(allDone?' done':''),
+      hd+' of '+wanted.length+' captured'+
+      (HEIGHTS.length-wanted.length?'  ·  '+(HEIGHTS.length-wanted.length)+' n/a':'')+
+      (allDone?'  ✓':'')));
+    view.appendChild(el('div','chk','Top of foundation is the datum — it runs level, so these stay single numbers. Tap any of them and mark it "not on this house" if there isn’t one.'));
     HEIGHTS.forEach(function(h){
-      view.appendChild(rowBtn(h.k,h.note,(h.k==='Roof pitch'?(S.heights[h.k]||''):showLen(S.heights[h.k])),
-        function(){askHeight(h.k);}));
+      var offNow=heightOff(h.k);
+      var b=rowBtn(h.k,offNow?'not on this house':h.note,
+        offNow?'n/a':(h.k==='Roof pitch'?(S.heights[h.k]||''):showLen(S.heights[h.k])),
+        function(){askHeight(h.k);});
+      if(offNow){
+        var v=b.querySelector('.val');
+        v.className='val';v.style.color='var(--ink-2)';v.style.fontWeight='500';
+      }
+      view.appendChild(b);
     });
+    /* Extra roof masses. A second ridge is almost never just a height — the
+       wing it belongs to has a pitch of its own too. */
+    view.appendChild(el('div','sub','Other roofs'+(ridges().length?'  —  '+ridges().length:'')));
+    view.appendChild(el('div','chk','A garage, a wing, a cross gable. Each one keeps its own ridge height and pitch.'));
+    if(!ridges().length){
+      view.appendChild(el('div','empty-state','Nothing yet. If the house is a simple gable, leave this empty.'));
+    }
+    ridges().forEach(function(r,i){(function(i,r){
+      var hh=el('div','sub',r.name);
+      hh.style.color='var(--ink)';
+      view.appendChild(hh);
+      view.appendChild(rowBtn('Ridge height','from top of foundation',showLen(r.h),
+        function(){askRidge(i,'h');}));
+      view.appendChild(rowBtn('Pitch',null,r.pitch||'',function(){askRidge(i,'pitch');}));
+      view.appendChild(rowBtn('Rename','',' ',function(){openRidgeName(r);},true));
+    })(i,r);});
+    var addb=el('button','row');
+    addb.innerHTML='<div class="lbl" style="color:var(--accent);font-weight:600">+ Another roof</div>';
+    addb.addEventListener('click',addRidge);
+    view.appendChild(addb);
     var gN=gradeCount();
     view.appendChild(el('div','sub','Grade at corners'+(gN?'  —  '+gN+' taken':'')));
     view.appendChild(el('div','chk','How far the dirt sits below that datum. Take it where it matters — nothing here is ever counted as missing.'));
@@ -3353,9 +3523,11 @@ function closeModal(){modal.hidden=true;mbox.innerHTML='';pendingDel=null;}
 function jobStats(j){
   var n=(!j.pts||j.pts.length<2)?0:(j.closed?j.pts.length:j.pts.length-1);
   var done=0;for(var i=0;i<n;i++)if(j.walls&&j.walls[i]&&j.walls[i].len)done++;
-  var hd=HEIGHTS.filter(function(h){return j.heights&&j.heights[h.k];}).length;
+  var offj=j.heightsOff||{};
+  var wantj=HEIGHTS.filter(function(h){return !offj[h.k];});
+  var hd=wantj.filter(function(h){return j.heights&&j.heights[h.k];}).length;
   if(!n)return'Nothing drawn yet';
-  return done+'/'+n+' walls · '+hd+'/'+HEIGHTS.length+' heights · '+
+  return done+'/'+n+' walls · '+hd+'/'+wantj.length+' heights · '+
     new Date(j.updated||Date.now()).toLocaleDateString(undefined,{month:'numeric',day:'numeric'});
 }
 function switchTo(i){save();DB.active=i;intoState();closeModal();setMode(S.closed?'measure':'draw');fitView();render();}
