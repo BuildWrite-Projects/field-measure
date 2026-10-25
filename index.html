@@ -411,13 +411,18 @@ function kindGlyph(k){for(var i=0;i<KINDS.length;i++)if(KINDS[i][0]===k)return K
 /* Top of foundation is the datum. It is level all the way round, so every
    height below is one honest number taken from it. What is NOT constant is
    how far the dirt sits below that line, and that lives per corner as grade. */
+/* Grouped, because these are two different kinds of thing. The building
+   ones are one set of numbers for the whole house. Eave, ridge and pitch
+   belong to a roof: any two of them plus the span give the third, which is
+   why splitting them up left a wing impossible to build from. Every roof
+   keeps its own three, the main one included. */
 var HEIGHTS=[
-  {k:'Floor-to-floor',note:'foundation top to first floor, then floor to floor'},
-  {k:'Eave height',note:'from top of foundation'},
-  {k:'Main ridge',note:'from top of foundation'},
-  {k:'Roof pitch',note:null},
-  {k:'Soffit depth',note:'how far the roof runs out past the eave wall'},
-  {k:'Rake overhang',note:'how far it runs out past the gable wall'}
+  {k:'Floor-to-floor',g:'building',note:'foundation top to first floor, then floor to floor'},
+  {k:'Soffit depth',g:'building',note:'how far the roof runs out past the eave wall'},
+  {k:'Rake overhang',g:'building',note:'how far it runs out past the gable wall'},
+  {k:'Eave height',g:'roof',note:'from top of foundation'},
+  {k:'Main ridge',g:'roof',note:'from top of foundation'},
+  {k:'Roof pitch',g:'roof',note:null}
 ];
 function heightNote(k){for(var i=0;i<HEIGHTS.length;i++)if(HEIGHTS[i].k===k)return HEIGHTS[i].note;return null;}
 /* These two were called something else before. The name is also the storage
@@ -435,6 +440,11 @@ function migrateJob(j){
     }
   }
   if(!j.ridges)j.ridges=[];
+  /* Roofs added before each one carried its own eave. Left blank rather than
+     filled in from the main roof: a new roof prefills in front of you where
+     you can see and change it, but quietly inventing a measurement for an
+     old one is how a wrong number ends up in a drawing. */
+  j.ridges.forEach(function(r){if(r.eave===undefined)r.eave='';});
   if(!j.heightsOff)j.heightsOff={};
 }
 function migrateAll(db){
@@ -456,11 +466,15 @@ function ridges(){var j=cur();if(!j)return[];if(!j.ridges)j.ridges=[];return j.r
 function ridgeBlanks(){
   var out=[];
   ridges().forEach(function(r,i){
+    if(!r.eave)out.push({kind:'ridge',idx:i,field:'eave',label:'the eave height on '+r.name});
     if(!r.h)out.push({kind:'ridge',idx:i,field:'h',label:'the ridge height on '+r.name});
     if(!r.pitch)out.push({kind:'ridge',idx:i,field:'pitch',label:'the pitch on '+r.name});
   });
   return out;
 }
+var RIDGE_FIELDS={eave:{prop:'eave',title:'eave height',label:'From top of foundation'},
+                  h:{prop:'h',title:'ridge height',label:'From top of foundation'},
+                  pitch:{prop:'pitch',title:'pitch',label:'Rise over 12'}};
 var S={pts:[],closed:false,walls:[],openings:[],heights:{},mode:'draw',tab:'walls',snap:90};
 var hist=[],future=[];
 var V={ox:0,oy:0,s:1};
@@ -2194,28 +2208,28 @@ function askHeight(name){
 /* An extra roof mass: its own ridge height and its own pitch. */
 function askRidge(i,field){
   var r=ridges()[i];if(!r)return;
+  var F=RIDGE_FIELDS[field]||RIDGE_FIELDS.h;
   var pitch=(field==='pitch');
   SHremove=function(){
     confirmBox('Remove '+r.name,
-      'That takes away its ridge height and pitch. The rest of the job stays as it is.',
+      'That takes away its eave height, ridge height and pitch. The rest of the job stays as it is.',
       'Remove it',function(){
         var a=ridges();if(a[i])a.splice(i,1);
         render();
       });
     closeSheet();
   };
-  openSheet({title:r.name+(pitch?' — pitch':' — ridge height'),pitch:pitch,
+  openSheet({title:r.name+' — '+F.title,pitch:pitch,
     removeLabel:'Remove this roof',
     tilt:pitch?function(v){
       if(!SH)return;
       SH.fields[0].raw=v;SH.active=0;drawFields();
     }:null,
-    fields:[{label:pitch?'Rise over 12':'From top of foundation',
-             type:pitch?'pitch':'dim',value:(pitch?r.pitch:r.h)||''}],
+    fields:[{label:F.label,type:pitch?'pitch':'dim',value:r[F.prop]||''}],
     done:function(v){
-      var was=pitch?r.pitch:r.h;
-      recordMeas(function(){if(pitch)r.pitch=was;else r.h=was;},lastWall);
-      if(pitch)r.pitch=v[0];else r.h=v[0];
+      var was=r[F.prop];
+      recordMeas(function(){r[F.prop]=was;},lastWall);
+      r[F.prop]=v[0];
       render();
     }});
 }
@@ -2242,7 +2256,11 @@ function openRidgeName(r,guess){
   ok.addEventListener('click',function(){
     var nm=(inp.value||'').trim()||(r?r.name:guess);
     if(r)r.name=nm;
-    else ridges().push({name:nm,h:'',pitch:''});
+    /* Most houses run one plate height all the way round, so start from the
+       main roof's eave rather than making it be typed again. It arrives
+       filled in and visible, so a roof that genuinely sits lower gets
+       corrected rather than quietly assumed. */
+    else ridges().push({name:nm,eave:S.heights['Eave height']||'',h:'',pitch:''});
     closeModal();render();
   });
   row.appendChild(no);row.appendChild(ok);mbox.appendChild(row);
@@ -2922,7 +2940,8 @@ function openReview(){
   if(ridges().length){
     sec('Other roofs');
     ridges().forEach(function(r){
-      line(r.name,showLen(r.h),'ridge height from top of foundation');
+      line(r.name,showLen(r.eave),'eave height from top of foundation');
+      line('',showLen(r.h),'ridge height');
       line('',r.pitch||'','pitch');
     });
   }
@@ -3005,6 +3024,7 @@ function summaryText(){
     out.push('OTHER ROOFS');
     ridges().forEach(function(r){
       out.push('  '+r.name.toUpperCase());
+      out.push('    Eave height   '+(showLen(r.eave)||'— MISSING —'));
       out.push('    Ridge height  '+(showLen(r.h)||'— MISSING —'));
       out.push('    Pitch         '+(r.pitch||'— MISSING —'));
     });
@@ -3091,7 +3111,7 @@ function render(){
       (HEIGHTS.length-wanted.length?'  ·  '+(HEIGHTS.length-wanted.length)+' n/a':'')+
       (allDone?'  ✓':'')));
     view.appendChild(el('div','chk','Top of foundation is the datum — it runs level, so these stay single numbers. Tap any of them and mark it "not on this house" if there isn’t one.'));
-    HEIGHTS.forEach(function(h){
+    function heightRow(h){
       var offNow=heightOff(h.k);
       var b=rowBtn(h.k,offNow?'not on this house':h.note,
         offNow?'n/a':(h.k==='Roof pitch'?(S.heights[h.k]||''):showLen(S.heights[h.k])),
@@ -3101,11 +3121,16 @@ function render(){
         v.className='val';v.style.color='var(--ink-2)';v.style.fontWeight='500';
       }
       view.appendChild(b);
-    });
-    /* Extra roof masses. A second ridge is almost never just a height — the
-       wing it belongs to has a pitch of its own too. */
+    }
+    view.appendChild(el('div','sub','The building'));
+    HEIGHTS.filter(function(h){return h.g==='building';}).forEach(heightRow);
+    /* Eave, ridge and pitch sit together because they describe one roof:
+       any two of them plus the span give the third. */
+    view.appendChild(el('div','sub','Main roof'));
+    HEIGHTS.filter(function(h){return h.g==='roof';}).forEach(heightRow);
+    /* Other roof masses, each carrying the same three. */
     view.appendChild(el('div','sub','Other roofs'+(ridges().length?'  —  '+ridges().length:'')));
-    view.appendChild(el('div','chk','A garage, a wing, a cross gable. Each one keeps its own ridge height and pitch.'));
+    view.appendChild(el('div','chk','A garage, a wing, a cross gable. Each keeps its own eave, ridge and pitch, so it can be built on its own.'));
     if(!ridges().length){
       view.appendChild(el('div','empty-state','Nothing yet. If the house is a simple gable, leave this empty.'));
     }
@@ -3113,6 +3138,8 @@ function render(){
       var hh=el('div','sub',r.name);
       hh.style.color='var(--ink)';
       view.appendChild(hh);
+      view.appendChild(rowBtn('Eave height','from top of foundation',showLen(r.eave),
+        function(){askRidge(i,'eave');}));
       view.appendChild(rowBtn('Ridge height','from top of foundation',showLen(r.h),
         function(){askRidge(i,'h');}));
       view.appendChild(rowBtn('Pitch',null,r.pitch||'',function(){askRidge(i,'pitch');}));
