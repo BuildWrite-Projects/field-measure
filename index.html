@@ -485,8 +485,12 @@ function S2W(p){return{x:(p.x-V.ox)/V.s,y:(p.y-V.oy)/V.s};}
 var KEY='fieldmeasure.jobs.v1',OLD='fieldmeasure.v1';
 var DB={jobs:[],active:0};
 function blankShape(name){return{name:name,pts:[],closed:false,walls:[],openings:[]};}
-function blankJob(name){
+/* bookJobId: the Job Book job this one belongs to (Job Book is the one list
+   of jobs, shared with Receipt Run). bookPending: made with no signal, to be
+   added to Job Book as soon as there is one. */
+function blankJob(name,bookJobId,bookPending){
   return{id:'j'+Date.now()+Math.floor(Math.random()*9999),name:name,updated:Date.now(),
+    bookJobId:bookJobId||null,bookPending:!!bookPending,
     shapes:[blankShape('House')],active:0,heights:{},snap:90,view:{ox:0,oy:0,s:1}};
 }
 function readDB(){
@@ -572,6 +576,7 @@ function initCloud(){
   if(!window.FMStore){setSync('local');return;}
   FMStore.init({
     onStatus:setSync,
+    onReady:linkJobs,
     onRemote:function(rem){
       /* The server has a copy. Take it only if it is newer than what is on this
          phone, or if this phone has nothing drawn yet. */
@@ -586,6 +591,53 @@ function initCloud(){
       }
     }
   });
+}
+
+/* Keep every job tied to Job Book:
+   - a linked job takes its name from Job Book (renamed there, renamed here)
+   - a job made with no signal is added to Job Book now
+   - an unlinked job whose name exactly matches a Job Book job is linked to it
+   Jobs that match nothing (tests, scratch drawings) are left alone. */
+var linking=false;
+function jbNorm(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,' ');}
+function linkJobs(){
+  if(linking||!window.FMStore||!FMStore.signedIn()||!FMStore.jobBook)return;
+  linking=true;
+  FMStore.jobBook().then(function(list){
+    var changed=false,chain=Promise.resolve();
+    var byId={},byName={};
+    list.forEach(function(b){byId[b.id]=b;if(!b.archived)byName[jbNorm(b.name)]=b;});
+    DB.jobs.forEach(function(j){
+      if(j.bookJobId){
+        var b=byId[j.bookJobId];
+        if(b&&b.name&&b.name!==j.name){j.name=b.name;changed=true;}
+        return;
+      }
+      var hit=byName[jbNorm(j.name)];
+      if(hit){j.bookJobId=hit.id;j.bookPending=false;changed=true;return;}
+      if(j.bookPending){
+        chain=chain.then(function(){
+          return FMStore.addToJobBook(j.name).then(function(id){
+            if(id){j.bookJobId=id;j.bookPending=false;changed=true;}
+          });
+        });
+      }
+    });
+    return chain.then(function(){
+      if(changed){
+        DB.updated=Date.now();
+        try{localStorage.setItem(KEY,JSON.stringify(DB));}catch(e){}
+        schedulePush();render();
+        if(!modal.hidden&&mbox.querySelector('.jrow'))openJobs();
+      }
+    });
+  }).catch(function(){}).then(function(){linking=false;});
+}
+addEventListener('online',function(){setTimeout(linkJobs,1500);});
+function jobLinkNote(j){
+  if(j.bookJobId)return 'in Job Book';
+  if(j.bookPending)return 'goes to Job Book when online';
+  return 'Field Measure only';
 }
 
 function stateStr(){
@@ -3548,8 +3600,14 @@ var modal=document.getElementById('modal'),mbox=document.getElementById('modalbo
 modal.addEventListener('click',function(e){if(e.target===modal)closeModal();});
 function closeModal(){modal.hidden=true;mbox.innerHTML='';pendingDel=null;}
 function jobStats(j){
-  var n=(!j.pts||j.pts.length<2)?0:(j.closed?j.pts.length:j.pts.length-1);
-  var done=0;for(var i=0;i<n;i++)if(j.walls&&j.walls[i]&&j.walls[i].len)done++;
+  /* walls across every outline (jobs keep outlines in j.shapes; very old
+     ones kept a single outline at the top level) */
+  var outlines=(j.shapes&&j.shapes.length)?j.shapes:[j];
+  var n=0,done=0;
+  outlines.forEach(function(sh){
+    var c=(!sh.pts||sh.pts.length<2)?0:(sh.closed?sh.pts.length:sh.pts.length-1);
+    n+=c;for(var i=0;i<c;i++)if(sh.walls&&sh.walls[i]&&sh.walls[i].len)done++;
+  });
   var offj=j.heightsOff||{};
   var wantj=HEIGHTS.filter(function(h){return !offj[h.k];});
   var hd=wantj.filter(function(h){return j.heights&&j.heights[h.k];}).length;
@@ -3580,7 +3638,7 @@ function openJobs(){
     var open=el('button','jopen');
     open.innerHTML='<b></b><small></small>';
     open.querySelector('b').textContent=j.name+(i===DB.active?'  ·  open':'');
-    open.querySelector('small').textContent=jobStats(j);
+    open.querySelector('small').textContent=jobStats(j)+'  ·  '+jobLinkNote(j);
     open.addEventListener('click',function(){if(i!==DB.active)switchTo(i);else closeModal();});
     var del=el('button','jdel','✕');
     del.setAttribute('aria-label','Delete '+j.name);
@@ -3596,7 +3654,7 @@ function openJobs(){
   });
   mbox.appendChild(ur);
   var mk=el('button','mbtn mprimary','New job');
-  mk.addEventListener('click',function(){openName(null);});
+  mk.addEventListener('click',openNewJob);
   var rn=el('button','mbtn msecondary','Rename this job');
   rn.addEventListener('click',function(){openName(cur());});
   var cl=el('button','mbtn msecondary','Close');
@@ -3628,7 +3686,88 @@ function drawConfirm(j,i){
   row.appendChild(no);row.appendChild(yes);box.appendChild(row);
   mbox.appendChild(box);
 }
+/* New job: pick it from Job Book, or name a new one, which is added to Job
+   Book (and so Receipt Run) as a prospect. A job already being measured here
+   opens instead of being started twice. */
+function startJob(name,bookJobId,bookPending){
+  save();var nj=blankJob(name,bookJobId,bookPending);DB.jobs.push(nj);DB.active=DB.jobs.length-1;
+  intoState();closeModal();setMode('draw');fitView();render();save();
+}
+function openNewJob(){
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle','New job'));
+  var list=(window.FMStore&&FMStore.jobBookCached)?FMStore.jobBookCached():[];
+  var mine={};DB.jobs.forEach(function(j,i){if(j.bookJobId)mine[j.bookJobId]=i;});
+  var open=list.filter(function(b){return !b.archived;});
+  /* the name box sits on top: typing filters the Job Book list below, and
+     Create starts a new job when nothing there is it */
+  var inp=document.createElement('input');
+  inp.type='text';inp.id='jobnameinput';
+  inp.placeholder='Type to find a job, or name a new one';
+  mbox.appendChild(inp);
+  var msg=el('div','sub','');mbox.appendChild(msg);
+  var row0=el('div','crow');
+  var no=el('button','mbtn msecondary','Cancel');
+  no.addEventListener('click',openJobs);
+  var ok=el('button','mbtn mprimary','Create new job');
+  row0.appendChild(no);row0.appendChild(ok);mbox.appendChild(row0);
+  var rows=[];
+  if(open.length){
+    mbox.appendChild(el('div','sub','Or pick a job from Job Book'));
+    open.forEach(function(b){
+      var row=el('div','jrow');rows.push({row:row,name:jbNorm(b.name)});
+      var btn=el('button','jopen');
+      btn.innerHTML='<b></b><small></small>';
+      btn.querySelector('b').textContent=b.name;
+      var have=(b.id in mine);
+      btn.querySelector('small').textContent=(b.status||'job')+(have?'  ·  already measuring here, opens it':'');
+      btn.addEventListener('click',function(){
+        if(have){switchTo(mine[b.id]);return;}
+        startJob(b.name,b.id,false);
+      });
+      row.appendChild(btn);mbox.appendChild(row);
+    });
+  } else {
+    mbox.appendChild(el('div','sub',(window.FMStore&&FMStore.signedIn())?'No Job Book jobs loaded yet.':'Sign in (tap the sync status) to see your Job Book jobs.'));
+  }
+  inp.addEventListener('input',function(){
+    var q=jbNorm(inp.value),shown=0;
+    rows.forEach(function(r){var on=!q||r.name.indexOf(q)>=0;r.row.style.display=on?'':'none';if(on)shown++;});
+    msg.textContent=q&&!shown?'Not in Job Book yet — Create adds it (as a prospect) to Job Book and Receipt Run.':'';
+  });
+  ok.addEventListener('click',function(){
+    var nm=(inp.value||'').trim();
+    if(!nm){inp.focus();msg.textContent='Type the new job’s name first — the way its folder is named.';return;}
+    /* the same name already in Job Book is that job, not a second one */
+    var same=list.filter(function(b){return jbNorm(b.name)===jbNorm(nm);})[0];
+    if(same){
+      if(same.id in mine){switchTo(mine[same.id]);return;}
+      startJob(same.name,same.id,false);return;
+    }
+    if(window.FMStore&&FMStore.signedIn()&&navigator.onLine){
+      ok.disabled=true;msg.textContent='Adding to Job Book...';
+      FMStore.addToJobBook(nm).then(function(id){
+        startJob(nm,id,!id);   /* no id: measure now, it links when it can */
+      });
+    } else {
+      startJob(nm,null,true);
+    }
+  });
+  /* refresh the list in the background; redraw if it changed */
+  if(window.FMStore&&FMStore.jobBook&&FMStore.signedIn()){
+    FMStore.jobBook().then(function(fresh){
+      if(JSON.stringify(fresh)!==JSON.stringify(list)&&!modal.hidden&&document.getElementById('jobnameinput')===inp&&!inp.value)openNewJob();
+    });
+  }
+}
 function openName(job){
+  if(job&&job.bookJobId){
+    modal.hidden=false;mbox.innerHTML='';
+    mbox.appendChild(el('div','mtitle','Rename job'));
+    mbox.appendChild(el('div','sub','This job’s name comes from Job Book. Rename it there and it changes here, and in Receipt Run, the next time this opens with signal.'));
+    var back=el('button','mbtn msecondary','OK');back.addEventListener('click',openJobs);mbox.appendChild(back);
+    return;
+  }
   modal.hidden=false;mbox.innerHTML='';
   mbox.appendChild(el('div','mtitle',job?'Rename job':'New job'));
   var inp=document.createElement('input');

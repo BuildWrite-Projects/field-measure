@@ -16,6 +16,7 @@
   var session = null;         // current auth session, or null
   var onStatus = function () {};
   var onRemote = function () {};
+  var onReady = function () {};   // signed in and the server copy is read
   var pushTimer = null;
   var pushing = false;
   var lastPushed = '';
@@ -242,6 +243,41 @@
     }, function () { pushing = false; status('err'); return false; });
   }
 
+  /* ---------- Job Book: the one list of jobs ------------------------------ */
+  /* Job Book (shared with Receipt Run) holds every Roberts & Associates job.
+     Field Measure picks its jobs from that list and adds new ones to it, so a
+     job started here shows up in Job Book and Receipt Run too. The list is
+     kept on the phone so the picker still works with no signal. */
+  var JB_KEY = 'fieldmeasure.jobbook.v1';
+  function jbCached() {
+    try { return JSON.parse(localStorage.getItem(JB_KEY) || '[]') || []; } catch (e) { return []; }
+  }
+  function jbFetch() {
+    if (!client || !session) return Promise.resolve(jbCached());
+    return client.from('jobbook_jobs').select('id,data').eq('book_id', 'ra').then(function (r) {
+      if (r.error || !r.data) return jbCached();
+      var list = r.data.map(function (row) {
+        var d = row.data || {};
+        return { id: row.id, name: d.name || '', status: d.status || '', archived: !!d.archived,
+                 folder: d.folder || '', code: d.code || '' };
+      }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+      try { localStorage.setItem(JB_KEY, JSON.stringify(list)); } catch (e) {}
+      return list;
+    }, function () { return jbCached(); });
+  }
+  function jbAdd(name) {
+    if (!client || !session) return Promise.resolve(null);
+    var id = 'fm' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+    var data = { name: name, bookId: 'ra', status: 'prospect', archived: false, waiting: false,
+                 createdAt: new Date().toISOString(), createdIn: 'Field Measure' };
+    return client.from('jobbook_jobs').insert({ id: id, data: data }).then(function (r) {
+      if (r.error) return null;
+      var list = jbCached(); list.push({ id: id, name: name, status: 'prospect', archived: false, folder: '', code: '' });
+      try { localStorage.setItem(JB_KEY, JSON.stringify(list)); } catch (e) {}
+      return id;
+    }, function () { return null; });
+  }
+
   /* ---------- public interface ------------------------------------------- */
   window.FMStore = {
 
@@ -251,6 +287,7 @@
       opts = opts || {};
       onStatus = opts.onStatus || onStatus;
       onRemote = opts.onRemote || onRemote;
+      onReady = opts.onReady || onReady;
       status('connecting');
 
       if (!window.supabase || !CFG.supabaseUrl || !CFG.supabaseKey) {
@@ -289,6 +326,8 @@
            whatever is on the phone, which on a new phone is nothing — pushing
            that would wipe the real measurements on the server. */
         pulled = true;
+        /* now it's safe to tie jobs to Job Book (it may write) */
+        setTimeout(function () { try { onReady(); } catch (e) {} }, 0);
         if (pending) return pushNow();
         status('ok');
       }
@@ -304,6 +343,14 @@
 
     /* Force an immediate write — used when the app is being backgrounded. */
     flush: function () { if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; } return pushNow(); },
+
+    /* Job Book jobs: jobBook() refreshes from the server (falls back to the
+       phone's copy), jobBookCached() is the phone's copy right now, and
+       addToJobBook(name) creates a prospect there and resolves to its id, or
+       null if it couldn't (no signal, not signed in). */
+    jobBook: jbFetch,
+    jobBookCached: jbCached,
+    addToJobBook: jbAdd,
 
     signedIn: function () { return !!session; },
     email: function () { return session ? session.user.email : null; },
