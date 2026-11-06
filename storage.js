@@ -92,6 +92,8 @@
       'autocapitalize="none" autocorrect="off" placeholder="you@example.com" style="' + fld + '">' +
       '<input id="fmpw" type="password" autocomplete="current-password" ' +
       'placeholder="password" style="' + fld + '">' +
+      '<input id="fmpw2" type="password" autocomplete="new-password" ' +
+      'placeholder="type the password again" style="' + fld + ';display:none">' +
       '<div id="fmmsg" style="font-size:13px;line-height:1.45;min-height:18px;color:var(--ink-2,#666)"></div>' +
       '<button id="fmgo" style="' + btn + ';background:var(--accent,#ff5a1f);' +
       'color:var(--accent-ink,#fff)">Sign in</button>' +
@@ -109,6 +111,7 @@
     var title = box.querySelector('#fmtitle');
     var swap = box.querySelector('#fmswap');
     var pw = box.querySelector('#fmpw');
+    var pw2 = box.querySelector('#fmpw2');
     var creating = false;
 
     swap.onclick = function () {
@@ -117,7 +120,9 @@
       go.textContent = creating ? 'Create account' : 'Sign in';
       swap.textContent = creating ? 'I already have an account' : 'Create an account instead';
       pw.setAttribute('autocomplete', creating ? 'new-password' : 'current-password');
-      msg.textContent = creating ? 'Pick something at least 8 characters.' : '';
+      pw2.style.display = creating ? '' : 'none';
+      pw2.value = '';
+      msg.textContent = creating ? 'Pick something at least 8 characters, and type it twice.' : '';
     };
 
     box.querySelector('#fmcx').onclick = function () { box.remove(); };
@@ -127,6 +132,7 @@
       var pass = pw.value || '';
       if (!email || !pass) { msg.textContent = 'Fill in both boxes.'; return; }
       if (creating && pass.length < 8) { msg.textContent = 'Use at least 8 characters.'; return; }
+      if (creating && pass !== (pw2.value || '')) { msg.textContent = 'The two passwords don’t match. Type them again.'; pw2.value = ''; pw2.focus(); return; }
       go.disabled = true;
       msg.textContent = creating ? 'Creating...' : 'Signing in...';
 
@@ -160,7 +166,8 @@
     }
 
     go.onclick = submit;
-    pw.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+    pw.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !creating) submit(); });
+    pw2.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
   }
 
   /* Offline diagnostics. Reports what the service worker and cache are actually
@@ -220,8 +227,23 @@
       }, function () { return null; });
   }
 
+  var noTeam = false;
+  function noTeamNote(st) {
+    var n = sheet('<div style="font-family:var(--display,system-ui);font-size:19px;letter-spacing:.06em;' +
+      'text-transform:uppercase;font-weight:700">' + (st.invite ? 'Set up your team first' : 'No invite yet') + '</div>' +
+      '<div style="font-size:14px;line-height:1.5">' + (st.invite
+        ? 'Open <b>Job Book</b> once and sign in there to set up your team. Until then, measurements save on this phone only, and sync after.'
+        : 'This email has no invite yet, so measurements save on this phone only. Ask the person who shared the app to invite this email address.') + '</div>' +
+      '<a href="../job-book/" style="display:block;text-align:center;border-radius:9px;padding:13px;background:var(--accent,#ff5a1f);' +
+      'color:var(--accent-ink,#fff);font-family:var(--display,system-ui);font-size:16px;letter-spacing:.06em;text-transform:uppercase;' +
+      'font-weight:700;text-decoration:none">Open Job Book</a>' +
+      '<button id="fmntok" style="border:none;border-radius:9px;padding:11px;background:none;color:var(--ink-2,#666);font-size:14px">Not now</button>');
+    n.querySelector('#fmntok').onclick = function () { n.remove(); };
+  }
+
   function pushNow() {
     if (!client || !session || pushing) return Promise.resolve(false);
+    if (noTeam) { status('local'); return Promise.resolve(false); }
     /* Never write before the first read has come back — see handlePulled. */
     if (!pulled) return Promise.resolve(false);
     var db = pending;
@@ -252,9 +274,25 @@
   function jbCached() {
     try { return JSON.parse(localStorage.getItem(JB_KEY) || '[]') || []; } catch (e) { return []; }
   }
+  /* The team's job book: the book marked takesJobs (Roberts & Associates for
+     Stephen's team, the first book of a new team). The database only ever
+     returns the signed-in person's own team's books. */
+  var jobBookId = null;
+  function jbBook() {
+    if (jobBookId) return Promise.resolve(jobBookId);
+    return client.from('jobbook_books').select('id,data').then(function (r) {
+      var rows = (r && r.data) || [];
+      var pick = rows.filter(function (b) { return b.data && b.data.takesJobs; })[0] || null;
+      jobBookId = pick ? pick.id : null;
+      return jobBookId;
+    }, function () { return null; });
+  }
   function jbFetch() {
     if (!client || !session) return Promise.resolve(jbCached());
-    return client.from('jobbook_jobs').select('id,data').eq('book_id', 'ra').then(function (r) {
+    return jbBook().then(function (book) {
+      if (!book) return { data: [] };
+      return client.from('jobbook_jobs').select('id,data').eq('book_id', book);
+    }).then(function (r) {
       if (r.error || !r.data) return jbCached();
       var list = r.data.map(function (row) {
         var d = row.data || {};
@@ -268,9 +306,12 @@
   function jbAdd(name) {
     if (!client || !session) return Promise.resolve(null);
     var id = 'fm' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
-    var data = { name: name, bookId: 'ra', status: 'prospect', archived: false, waiting: false,
-                 createdAt: new Date().toISOString(), createdIn: 'Field Measure' };
-    return client.from('jobbook_jobs').insert({ id: id, data: data }).then(function (r) {
+    return jbBook().then(function (book) {
+      if (!book) return { error: { message: 'no job book' } };
+      var data = { name: name, bookId: book, status: 'prospect', archived: false, waiting: false,
+                   createdAt: new Date().toISOString(), createdIn: 'Field Measure' };
+      return client.from('jobbook_jobs').insert({ id: id, data: data });
+    }).then(function (r) {
       if (r.error) return null;
       var list = jbCached(); list.push({ id: id, name: name, status: 'prospect', archived: false, folder: '', code: '' });
       try { localStorage.setItem(JB_KEY, JSON.stringify(list)); } catch (e) {}
@@ -319,6 +360,13 @@
       }, function () { ready = true; status('local'); });
 
       function handlePulled(remote) {
+        /* No team yet (a new account): measurements stay on this phone, and
+           the person is pointed at Job Book, where a team is set up. */
+        client.rpc('my_team_status').then(function (r) {
+          var st = r && r.data;
+          if (st && !st.team) { noTeam = true; status('local'); noTeamNote(st); }
+          else noTeam = false;
+        }, function () {});
         if (remote && remote.jobs && remote.jobs.length) {
           try { onRemote(remote); } catch (e) {}
         }
