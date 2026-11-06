@@ -9,6 +9,15 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
 <script src="storage.js"></script>
+<script src="feedback.js"></script>
+<script>
+  /* Feedback button in the header, before the sync status */
+  document.addEventListener('DOMContentLoaded', function () {
+    var hdr = document.getElementById('hdr');
+    if (hdr && window.BWFeedback) BWFeedback.mount({ app: 'field-measure', into: hdr, before: document.getElementById('sync'),
+      client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-05' });
+  });
+</script>
 </head><body>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>

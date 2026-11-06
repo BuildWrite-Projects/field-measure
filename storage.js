@@ -352,6 +352,9 @@
     jobBookCached: jbCached,
     addToJobBook: jbAdd,
 
+    /* the database connection, for the shared Feedback button (feedback.js) */
+    client: function () { return client; },
+
     signedIn: function () { return !!session; },
     email: function () { return session ? session.user.email : null; },
     prompt: askToSignIn

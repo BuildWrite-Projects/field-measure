@@ -7,12 +7,13 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v4';
+var VERSION = 'fm-v5';
 var CORE = [
   './',
   'index.html',
   'config.js',
   'storage.js',
+  'feedback.js',
   'manifest.webmanifest',
   'icons/icon-180.png',
   'icons/icon-192.png',
