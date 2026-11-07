@@ -15,7 +15,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     var hdr = document.getElementById('hdr');
     if (hdr && window.BWFeedback) BWFeedback.mount({ app: 'field-measure', into: hdr, before: document.getElementById('sync'),
-      client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-05' });
+      client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-06' });
   });
 </script>
 </head><body>
@@ -1661,7 +1661,23 @@ function alignSet(sel){
   }
 }
 function ids(){return Object.keys(ptrs);}
+/* Ghost fingers. Feedback 2026-11-06: after adding a window and going back,
+   taps did nothing until a reload. iOS sometimes never reports a finger
+   lifting (a sheet or the keypad opening as it lifts), so its id stayed in
+   ptrs; every later tap then looked like the second finger of a pinch and was
+   ignored. Clear the touch state on a fresh first touch, when the browser
+   says it lost a finger, and on every mode switch. */
+function resetTouches(){
+  ptrs={};startPt=null;moved=false;pinchD=0;pinchMid=null;dragIdx=-1;dragLive=false;dragBase=null;weldTo=-1;
+  grpIdx=-1;grpLive=false;grpBase=null;grpLock=null;
+}
 cv.addEventListener('pointerdown',function(e){
+  /* a primary pointer is the first finger of a new touch: nothing else can
+     really be down, so anything still listed is a ghost */
+  if(e.isPrimary&&ids().length){
+    if(dragLive||grpLive)render();   /* a half-finished drag: show where it stopped */
+    resetTouches();
+  }
   try{cv.setPointerCapture(e.pointerId);}catch(err){}
   ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
   var k=ids();
@@ -1741,6 +1757,14 @@ function endPtr(e){
 }
 cv.addEventListener('pointerup',endPtr);
 cv.addEventListener('pointercancel',endPtr);
+cv.addEventListener('lostpointercapture',function(e){
+  if(!ptrs[e.pointerId])return;          /* normal lift: endPtr already ran */
+  delete ptrs[e.pointerId];              /* lost, not lifted: never a tap */
+  if(!ids().length){
+    if(dragLive||grpLive)render();
+    resetTouches();save();
+  }
+});
 cv.addEventListener('wheel',function(e){
   e.preventDefault();
   var r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
@@ -3490,6 +3514,7 @@ function hintText(){
 }
 var panelOpen=true;
 function setMode(m){
+  resetTouches();
   S.mode=m;
   if(m==='measure')S.tab='walls';
   else if(m==='open')S.tab='openings';
