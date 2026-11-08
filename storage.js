@@ -227,18 +227,65 @@
       }, function () { return null; });
   }
 
+  /* ---------- no team yet ------------------------------------------------ */
+  /* A new account has no team until its invite is accepted, and nothing syncs
+     until then. It's handled right here, so someone given only Field Measure
+     never has to open another app. Measuring is never blocked: "Not now" leaves
+     everything saving on the phone, and the question comes back next time the
+     app opens. */
   var noTeam = false;
-  function noTeamNote(st) {
+  var teamAsked = false;      // one sheet per sign-in: startup can read twice
+
+  function noInviteNote() {
     var n = sheet('<div style="font-family:var(--display,system-ui);font-size:19px;letter-spacing:.06em;' +
-      'text-transform:uppercase;font-weight:700">' + (st.invite ? 'Set up your team first' : 'No invite yet') + '</div>' +
-      '<div style="font-size:14px;line-height:1.5">' + (st.invite
-        ? 'Open <b>Job Book</b> once and sign in there to set up your team. Until then, measurements save on this phone only, and sync after.'
-        : 'This email has no invite yet, so measurements save on this phone only. Ask the person who shared the app to invite this email address.') + '</div>' +
-      '<a href="../job-book/" style="display:block;text-align:center;border-radius:9px;padding:13px;background:var(--accent,#ff5a1f);' +
-      'color:var(--accent-ink,#fff);font-family:var(--display,system-ui);font-size:16px;letter-spacing:.06em;text-transform:uppercase;' +
-      'font-weight:700;text-decoration:none">Open Job Book</a>' +
-      '<button id="fmntok" style="border:none;border-radius:9px;padding:11px;background:none;color:var(--ink-2,#666);font-size:14px">Not now</button>');
+      'text-transform:uppercase;font-weight:700">No invite yet</div>' +
+      '<div style="font-size:14px;line-height:1.5">This email has no invite yet, so measurements save on ' +
+      'this phone only. Ask the person who shared the app to invite this email address, then reopen the app.</div>' +
+      '<button id="fmntok" style="border:none;border-radius:9px;padding:13px;background:var(--surface-2,#eee);' +
+      'color:var(--ink,#111);font-family:var(--display,system-ui);font-size:16px;letter-spacing:.06em;' +
+      'text-transform:uppercase;font-weight:700">OK</button>');
     n.querySelector('#fmntok').onclick = function () { n.remove(); };
+  }
+
+  /* An invite is waiting: start your own team (a friend), or join the team you
+     were invited to. onDone runs once the team exists. */
+  function teamSetupSheet(invite, onDone) {
+    var joining = invite.kind === 'join';
+    var team = esc(invite.teamName || 'the team');
+    var box = sheet('<div style="font-family:var(--display,system-ui);font-size:19px;letter-spacing:.06em;' +
+      'text-transform:uppercase;font-weight:700">' + (joining ? 'Join ' + team : 'Name your team') + '</div>' +
+      '<div style="font-size:14px;line-height:1.5">' + (joining
+        ? 'You’ve been invited to <b>' + team + '</b>. Your measurements will sync with its jobs.'
+        : 'Your jobs and measurements live in your own team, and nobody else sees them. Use your business name, or your own name.') + '</div>' +
+      (joining ? '' : '<input id="fmteam" type="text" autocomplete="organization" placeholder="e.g. Sam’s Builds" ' +
+        'style="font-size:16px;padding:12px;border:2px solid var(--line,#ccc);border-radius:9px;' +
+        'background:var(--surface-2,#f4f4f4);color:var(--ink,#111);width:100%">') +
+      '<div id="fmtmsg" style="font-size:13px;line-height:1.45;min-height:18px;color:var(--ink-2,#666)"></div>' +
+      '<button id="fmtgo" style="border:none;border-radius:9px;padding:13px;background:var(--accent,#ff5a1f);' +
+      'color:var(--accent-ink,#fff);font-family:var(--display,system-ui);font-size:16px;letter-spacing:.06em;' +
+      'text-transform:uppercase;font-weight:700">' + (joining ? 'Join' : 'Start my team') + '</button>' +
+      '<button id="fmtcx" style="border:none;border-radius:9px;padding:11px;background:none;' +
+      'color:var(--ink-2,#666);font-size:14px">Not now</button>');
+    var msg = box.querySelector('#fmtmsg'), go = box.querySelector('#fmtgo'), nm = box.querySelector('#fmteam');
+    box.querySelector('#fmtcx').onclick = function () { box.remove(); };
+    if (nm) setTimeout(function () { try { nm.focus(); } catch (e) {} }, 60);
+    function submit() {
+      var name = nm ? (nm.value || '').trim() : null;
+      if (nm && !name) { msg.textContent = 'Type a name for your team.'; nm.focus(); return; }
+      go.disabled = true;
+      msg.textContent = joining ? 'Joining...' : 'Setting up your team...';
+      client.rpc('accept_invite', { team_name: name }).then(function (r) {
+        go.disabled = false;
+        if (r.error) { msg.textContent = 'That did not go through. Try again in a moment.'; return; }
+        box.remove();
+        onDone();
+      }, function () {
+        go.disabled = false;
+        msg.textContent = 'Could not reach the server. Check your signal.';
+      });
+    }
+    go.onclick = submit;
+    if (nm) nm.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
   }
 
   function pushNow() {
@@ -343,7 +390,7 @@
       client.auth.onAuthStateChange(function (_e, s) {
         var was = !!session;
         session = s || null;
-        if (!session) { pulled = false; status('local'); return; }
+        if (!session) { pulled = false; noTeam = false; teamAsked = false; jobBookId = null; status('local'); return; }
         if (!was) {
           /* The library runs this callback while holding its own lock. Calling
              the database from inside it can deadlock, and the read simply never
@@ -360,13 +407,29 @@
       }, function () { ready = true; status('local'); });
 
       function handlePulled(remote) {
-        /* No team yet (a new account): measurements stay on this phone, and
-           the person is pointed at Job Book, where a team is set up. */
-        client.rpc('my_team_status').then(function (r) {
+        /* Find out about the team before anything can write. If the check can't
+           get through (no signal), carry on as a member: the database still
+           refuses a write it shouldn't take. */
+        return client.rpc('my_team_status').then(function (r) {
           var st = r && r.data;
-          if (st && !st.team) { noTeam = true; status('local'); noTeamNote(st); }
-          else noTeam = false;
-        }, function () {});
+          noTeam = !!(st && !st.team);
+          if (noTeam && !teamAsked) {
+            teamAsked = true;
+            if (st.invite) teamSetupSheet(st.invite, teamReady); else noInviteNote();
+          }
+        }, function () {}).then(function () { afterPull(remote); });
+      }
+
+      /* The team now exists: everything held on the phone can go up. */
+      function teamReady() {
+        noTeam = false;
+        jobBookId = null;      // the new team's job book
+        setTimeout(function () { try { onReady(); } catch (e) {} }, 0);
+        if (pending) return pushNow();
+        status('ok');
+      }
+
+      function afterPull(remote) {
         if (remote && remote.jobs && remote.jobs.length) {
           try { onRemote(remote); } catch (e) {}
         }
@@ -376,6 +439,7 @@
         pulled = true;
         /* now it's safe to tie jobs to Job Book (it may write) */
         setTimeout(function () { try { onReady(); } catch (e) {} }, 0);
+        if (noTeam) { status('local'); return; }
         if (pending) return pushNow();
         status('ok');
       }
