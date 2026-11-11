@@ -908,7 +908,8 @@ function paint(){
   ctx.lineCap='round';ctx.lineJoin='round';
   /* "You are here": a wide glow under the wall last measured or being
      measured, so after shooting it with the Disto you can see which one. */
-  if(lastWall>=0&&lastWall<n){
+  var selOn=(S.mode==='measure'&&lastWall>=0&&lastWall<n);
+  if(selOn){
     var hs0=seg(lastWall),HA=W2S(hs0[0]),HB=W2S(hs0[1]);
     ctx.save();ctx.globalAlpha=.35;ctx.strokeStyle=C.acc;ctx.lineWidth=Math.max(10,18*hs);
     ctx.beginPath();ctx.moveTo(HA.x,HA.y);ctx.lineTo(HB.x,HB.y);ctx.stroke();ctx.restore();
@@ -962,7 +963,7 @@ function paint(){
         /* an unmeasured wall shows its number, so "Wall 3" on the entry
            sheet can be found on the sketch. Kept down to the fit-the-house
            zoom, shrinking a little, since that is the view used on site. */
-        var wl=String(j+1),here=(j===lastWall),nh=Math.round(Math.max(15,20*hs));
+        var wl=String(j+1),here=(selOn&&j===lastWall),nh=Math.round(Math.max(15,20*hs));
         ctx.font='700 '+Math.round(Math.max(10,12*hs))+'px "IBM Plex Sans",sans-serif';
         var bw2=Math.max(nh,ctx.measureText(wl).width+10);
         ctx.fillStyle=here?C.acc:C.surf;ctx.strokeStyle=here?C.acc:C.miss;ctx.lineWidth=1.8;
@@ -1037,6 +1038,12 @@ function paint(){
       ctx.fillStyle=cssvar('--accent-ink');ctx.font='600 11px "IBM Plex Sans",sans-serif';
       ctx.fillText('1',F0.x,F0.y+.5);
     }
+  }
+  if(selOn&&!(flashAt&&Date.now()<flashEnd)){
+    /* the steady ring that stays on the selected wall once the pulse stops */
+    var sm=W2S(wallMid(lastWall));
+    ctx.strokeStyle=C.acc;ctx.lineWidth=3;
+    ctx.beginPath();ctx.arc(sm.x,sm.y,17,0,6.284);ctx.stroke();
   }
   if(flashAt&&Date.now()<flashEnd){
     var fp=W2S(flashAt),ph=(Date.now()%900)/900;
@@ -1435,8 +1442,15 @@ function tap(p){
     }
     if(gc>=0){askGrade(gc);return;}
     var h=hitWall(p);
-    if(!h){clearPicks();return;}
-    askLength(h.wall);
+    if(!h){
+      /* open paper lets go of the selected wall */
+      if(lastWall>=0){lastWall=-1;render();}
+      clearPicks();return;
+    }
+    /* first tap selects the wall and lights it up; a second tap on the
+       same wall opens its length */
+    if(h.wall===lastWall)askLength(h.wall);
+    else selectWall(h.wall,false);
   }else{
     var ex=hitOpening(p);
     if(ex>=0){askOpening(ex,false);return;}
@@ -2236,10 +2250,35 @@ function distoTo16(raw){
   }
   return null;
 }
+/* No entry box open, but a wall is selected in Measure: the reading goes
+   straight onto that wall and the selection moves on to the next one. */
+function distoDirectOK(){
+  if(SH||S.mode!=='measure'||!(lastWall>=0&&lastWall<segCount()))return false;
+  var ids=['modal','review','fullshot'];
+  for(var q=0;q<ids.length;q++){var e=document.getElementById(ids[q]);if(e&&!e.hidden)return false;}
+  return true;
+}
+function distoDirect(raw){
+  var i=lastWall,t=distoTo16(raw);
+  if(t===null){
+    say(/^\s*\d+([.,]\d+)?\s*$/.test(raw)
+      ? 'Got '+raw.trim()+' with no unit. On the Disto, turn on sending the unit (Bluetooth settings), then send again.'
+      : 'Couldn’t read "'+raw.trim()+'". Nothing was filled in.');
+    render();return;
+  }
+  if(t<=0){say('Got a zero reading. Nothing was filled in.');render();return;}
+  var prevVal=wallLen(i),txt=(units()==='in'?fmtInches(t):fmtFtIn(t));
+  recordMeas(function(){setWallLen(i,prevVal);},i);
+  setWallLen(i,txt);applyGaps(i);
+  if(selectNextWall(i))say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+' (from the Disto). Now on wall '+(lastWall+1)+'.');
+  else say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+' (from the Disto). Every wall has a length.');
+  render();
+}
 function distoCommit(){
   if(DISTO.timer){clearTimeout(DISTO.timer);DISTO.timer=null;}
   var raw=DISTO.buf;DISTO.buf='';
-  if(!SH||!raw.trim())return;
+  if(!raw.trim())return;
+  if(!SH){if(distoDirectOK())distoDirect(raw);return;}
   var f=SH.fields[SH.active];
   if(f.type==='pitch'){distoNote('Got '+raw.trim()+' — pick a length box first, then send again.',true);return;}
   var t=distoTo16(raw);
@@ -2261,11 +2300,25 @@ function distoCommit(){
   distoNote('✓ '+label+': '+fmtFtIn(t)+'  (from the Disto)');
 }
 document.addEventListener('keydown',function(e){
-  if(!SH||sheet.hidden)return;
   var t=e.target;
   if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;
   if(e.ctrlKey||e.metaKey||e.altKey)return;
   var k=e.key;
+  if(!(SH&&!sheet.hidden)){
+    /* no entry box: only a selected wall in Measure takes a reading */
+    if(!distoDirectOK())return;
+    if(k==='Enter'||k==='Tab'){
+      e.preventDefault();
+      if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+      distoCommit();
+    }else if(k&&k.length===1&&/[0-9.,'"\/ \-a-zA-Z′″’”]/.test(k)){
+      e.preventDefault();
+      DISTO.buf+=k;
+      if(DISTO.timer)clearTimeout(DISTO.timer);
+      DISTO.timer=setTimeout(distoCommit,700);
+    }
+    return;
+  }
   if(k==='Enter'||k==='Tab'){
     e.preventDefault();
     /* stop a focused button from being "pressed" by the Enter */
@@ -2310,8 +2363,46 @@ function askLength(i){
     fields:[{label:'Length',value:prevVal}],
     done:function(v){
       recordMeas(function(){setWallLen(i,prevVal);},prevLast);
-      setWallLen(i,v[0]);applyGaps(i);render();
+      setWallLen(i,v[0]);applyGaps(i);
+      if(v[0])selectNextWall(i);
+      render();
     }});
+}
+/* ---------- the selected wall ----------
+   In Measure, lastWall is the wall you're on. It glows, carries a ring, and
+   pulses for a few seconds when it is picked, so after looking up from the
+   laser you can see where you are. */
+function wallMid(i){var s=seg(i);return{x:(s[0].x+s[1].x)/2,y:(s[0].y+s[1].y)/2};}
+function beaconAt(p){
+  flashAt=p;flashEnd=Date.now()+4000;
+  if(flashTimer)clearInterval(flashTimer);
+  flashTimer=setInterval(function(){
+    if(Date.now()>flashEnd){clearInterval(flashTimer);flashTimer=null;flashAt=null;}
+    paint();
+  },90);
+}
+function selectWall(i,pan){
+  if(i<0||i>=segCount())return;
+  lastWall=i;
+  var m=wallMid(i);
+  if(pan){
+    /* bring it on screen if it's off the edge, without changing the zoom */
+    var sp=W2S(m);
+    if(sp.x<50||sp.x>W-50||sp.y<50||sp.y>H-50){V.ox=W/2-m.x*V.s;V.oy=H/2-m.y*V.s;}
+  }
+  beaconAt(m);
+  render();
+}
+/* After a wall gets its length, move on to the next blank one round the
+   house (the way the ↺ button says). Nothing blank: stay put and say so. */
+function selectNextWall(from){
+  var n=segCount();
+  for(var step=1;step<=n;step++){
+    var k=(((from+nextDir*step)%n)+n)%n;
+    if(!wallLen(k)){selectWall(k,true);return true;}
+  }
+  say('Every wall has a length.');
+  return false;
 }
 function askOpening(i,isNew){
   var o=S.openings[i];
@@ -2672,10 +2763,13 @@ function goToBlank(){
     for(var step=1;step<=n;step++){
       var k=(((start+nextDir*step)%n)+n)%n;
       if(wallLen(k))continue;
+      /* select it and point the beacon at it; a second tap on the wall
+         (or a Disto reading) fills it in */
       var sg=seg(k);
+      setMode('measure');
+      lastWall=k;
       focusAt({x:(sg[0].x+sg[1].x)/2,y:(sg[0].y+sg[1].y)/2});
-      setMode('measure');render();
-      askLength(k);
+      render();
       return;
     }
   }
@@ -3653,6 +3747,8 @@ function hintText(){
   if(alignOn)return alignSel.length<2
     ? 'Tap every corner you want to work on \u2014 a whole run of wall, jogs and all. Tap open paper to let them go.'
     : 'Drag a picked corner to slide all '+alignSel.length+' as one piece. Tap open paper when done, or the button to flatten them onto one line.';
+  if(S.mode==='measure'&&lastWall>=0&&lastWall<segCount())
+    return 'Wall '+(lastWall+1)+' selected. Tap it again to type the length, or shoot it with the Disto and press send. Tap open paper to let go.';
   if(S.mode==='measure')return 'Tap a wall for its length, or a corner for its grade \u2014 how far the dirt sits below the top of the foundation. Drag a corner to stretch it.';
   if(S.mode==='open')return 'Tap a wall where a window or door sits to add one. Tap an opening already there to edit or remove it.';
   if(S.snap===90)return 'Tap to place a corner. Drag one onto its neighbour to join them. Drag anywhere else to move the paper.';
