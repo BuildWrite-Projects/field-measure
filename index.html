@@ -259,6 +259,8 @@ pre#sumtext{font-family:var(--num);font-size:12.5px;line-height:1.6;white-space:
 .box b{display:block;font-family:var(--display);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);font-weight:600}
 .box span{font-family:var(--num);font-size:19px;font-weight:600;display:block;min-height:25px;overflow:hidden}
 .slotout{font-family:var(--num);font-size:16px;font-weight:600;color:var(--accent);padding-left:2px}
+#distonote{font-size:13px;font-weight:600;padding:7px 10px;border-radius:9px;background:var(--surface-2);color:var(--accent)}
+#distonote.bad{color:#c0392b}
 .slotalt{font-family:var(--num);font-size:12.5px;font-weight:500;color:var(--ink-2)}
 #pad{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
 #pad button{background:var(--surface-2);color:var(--ink);border:none;border-radius:9px;padding:14px 2px;font-family:var(--num);font-size:19px;font-weight:600}
@@ -341,6 +343,7 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
       <div id="kinds"></div>
       <div id="flagrow" hidden></div>
       <div id="fields"></div>
+      <div id="distonote" hidden></div>
       <div id="fracs"></div>
       <div id="pad"></div>
       <div id="sheetacts">
@@ -2142,7 +2145,110 @@ function openSheet(cfg){
 }
 /* tiltStop here matters: the sensor must not keep running once the sheet is
    gone, or it drains the battery in a pocket all afternoon. */
-function closeSheet(){tiltStop();sheet.hidden=true;SH=null;SHremove=null;}
+function closeSheet(){tiltStop();distoReset();sheet.hidden=true;SH=null;SHremove=null;}
+
+/* ---------- Leica Disto (or any Bluetooth keyboard) ----------
+   The Disto X3 pairs with the phone as a keyboard: press its send key and it
+   "types" the reading, e.g. 12'04 1/2"  or  3.772 m  or  148.5 in, followed by
+   Enter or Tab. While the entry sheet is open, collect those keystrokes, turn
+   the reading into feet / inches / sixteenths, drop it into the box that is
+   selected, and move on to the next measurement. The on-screen pad is
+   untouched; this only listens. */
+var DISTO={buf:'',timer:null,noteTimer:null};
+function distoReset(){
+  DISTO.buf='';
+  if(DISTO.timer){clearTimeout(DISTO.timer);DISTO.timer=null;}
+  if(DISTO.noteTimer){clearTimeout(DISTO.noteTimer);DISTO.noteTimer=null;}
+  var n=document.getElementById('distonote');if(n){n.hidden=true;n.textContent='';}
+}
+function distoNote(msg,bad){
+  var n=document.getElementById('distonote');
+  n.textContent=msg;n.className=bad?'bad':'';n.hidden=false;
+  if(DISTO.noteTimer)clearTimeout(DISTO.noteTimer);
+  DISTO.noteTimer=setTimeout(function(){n.hidden=true;},bad?6000:3000);
+}
+/* A reading as sixteenths of an inch, or null if it can't be read safely. */
+function distoTo16(raw){
+  var s=(raw||'').trim().replace(/[′’]/g,"'").replace(/[″”]/g,'"')
+    .replace(/''/g,'"').replace(/\s+/g,' ');
+  if(!s)return null;
+  var m,v;
+  /* feet + inches (+ fraction):  12'04 1/2"   12' 4-1/2"   12'4" */
+  m=s.match(/^(\d+)\s*'\s*(?:(\d+)(?:[ -]+(\d+)\/(\d+))?|(\d+)\/(\d+))?\s*"?$/);
+  if(m){
+    v=parseInt(m[1],10)*12+(m[2]?parseInt(m[2],10):0);
+    if(m[3])v+=parseInt(m[3],10)/parseInt(m[4],10);
+    if(m[5])v+=parseInt(m[5],10)/parseInt(m[6],10);
+    return Math.round(v*16);
+  }
+  /* inches with a fraction:  148 1/2"   148 1/2 in   5/8 in */
+  m=s.match(/^(?:(\d+)[ -]+)?(\d+)\/(\d+)\s*(?:"|in)$/i);
+  if(m)return Math.round(((m[1]?parseInt(m[1],10):0)+parseInt(m[2],10)/parseInt(m[3],10))*16);
+  /* a decimal number with a unit:  3.772 m   3772 mm   12.38 ft   148.5 in   148.5" */
+  m=s.match(/^(\d+(?:[.,]\d+)?)\s*(mm|cm|m|ft|'|in|")$/i);
+  if(m){
+    v=parseFloat(m[1].replace(',','.'));
+    var u=m[2].toLowerCase(),inch;
+    if(u==='mm')inch=v/25.4;
+    else if(u==='cm')inch=v/2.54;
+    else if(u==='m')inch=v/0.0254;
+    else if(u==='ft'||u==="'")inch=v*12;
+    else inch=v;
+    return Math.round(inch*16);
+  }
+  return null;
+}
+function distoCommit(){
+  if(DISTO.timer){clearTimeout(DISTO.timer);DISTO.timer=null;}
+  var raw=DISTO.buf;DISTO.buf='';
+  if(!SH||!raw.trim())return;
+  var f=SH.fields[SH.active];
+  if(f.type==='pitch'){distoNote('Got '+raw.trim()+' — pick a length box first, then send again.',true);return;}
+  var t=distoTo16(raw);
+  if(t===null){
+    if(/^\s*\d+([.,]\d+)?\s*$/.test(raw))
+      distoNote('Got '+raw.trim()+' with no unit. On the Disto, turn on sending the unit (Bluetooth settings), then send again.',true);
+    else distoNote('Couldn’t read "'+raw.trim()+'". Nothing was filled in.',true);
+    return;
+  }
+  if(t<=0){distoNote('Got a zero reading. Nothing was filled in.',true);return;}
+  var ti=Math.floor(t/16),r=t%16;
+  f.ft=String(Math.floor(ti/12));f.inch=String(ti%12);f.frac=r?reduce16(r):'';
+  var label=f.label;
+  /* on to the next length box, if there is one */
+  for(var j=SH.active+1;j<SH.fields.length;j++){
+    if(SH.fields[j].type!=='pitch'){SH.active=j;SH.part='ft';break;}
+  }
+  drawFields();
+  distoNote('✓ '+label+': '+fmtFtIn(t)+'  (from the Disto)');
+}
+document.addEventListener('keydown',function(e){
+  if(!SH||sheet.hidden)return;
+  var t=e.target;
+  if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  var k=e.key;
+  if(k==='Enter'||k==='Tab'){
+    e.preventDefault();
+    /* stop a focused button from being "pressed" by the Enter */
+    if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+    distoCommit();return;
+  }
+  if(k==='ArrowDown'||k==='ArrowRight'||k==='ArrowUp'||k==='ArrowLeft'){
+    if(DISTO.buf)return;
+    var step=(k==='ArrowDown'||k==='ArrowRight')?1:-1,j=SH.active+step;
+    while(j>=0&&j<SH.fields.length&&SH.fields[j].type==='pitch')j+=step;
+    if(j>=0&&j<SH.fields.length){SH.active=j;SH.part='ft';drawFields();}
+    e.preventDefault();return;
+  }
+  if(k&&k.length===1&&/[0-9.,'"\/ \-a-zA-Z′″’”]/.test(k)){
+    e.preventDefault();
+    DISTO.buf+=k;
+    /* No Enter or Tab set on the Disto? Take the reading once the typing stops. */
+    if(DISTO.timer)clearTimeout(DISTO.timer);
+    DISTO.timer=setTimeout(distoCommit,700);
+  }
+});
 document.getElementById('save').addEventListener('click',function(){
   if(!SH)return;var f=SH.fields,d=SH.done;closeSheet();
   d(f.map(fieldText));
