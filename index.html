@@ -213,6 +213,7 @@ pre#sumtext{font-family:var(--num);font-size:12.5px;line-height:1.6;white-space:
 #statustext{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #findbtn{flex:0 0 auto;background:var(--miss);color:#fff;border:none;border-radius:8px;padding:7px 13px;
   font-family:var(--display);font-size:14px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+#findbtn small{display:block;font-family:var(--body);font-size:10.5px;letter-spacing:0;text-transform:none;font-weight:600;opacity:.9}
 #status.clear{color:var(--ok)}
 #caret{font-size:11px;opacity:.65;flex:0 0 auto}
 
@@ -905,6 +906,13 @@ function paint(){
   var bare=V.s<=MINZ*1.03;
   var n=segCount();
   ctx.lineCap='round';ctx.lineJoin='round';
+  /* "You are here": a wide glow under the wall last measured or being
+     measured, so after shooting it with the Disto you can see which one. */
+  if(lastWall>=0&&lastWall<n){
+    var hs0=seg(lastWall),HA=W2S(hs0[0]),HB=W2S(hs0[1]);
+    ctx.save();ctx.globalAlpha=.35;ctx.strokeStyle=C.acc;ctx.lineWidth=Math.max(10,18*hs);
+    ctx.beginPath();ctx.moveTo(HA.x,HA.y);ctx.lineTo(HB.x,HB.y);ctx.stroke();ctx.restore();
+  }
   for(var i=0;i<n;i++){
     var s=seg(i),has=!!wallLen(i),A=W2S(s[0]),B=W2S(s[1]);
     ctx.strokeStyle=has?C.ok:C.miss;ctx.lineWidth=Math.max(2.2,4*hs);
@@ -950,6 +958,18 @@ function paint(){
       ctx.fillStyle=C.ink;ctx.fillText(L,mx,my+.5);
     }else{
       if(bare)continue;
+      if(!tiny){
+        /* an unmeasured wall shows its number, so "Wall 3" on the entry
+           sheet can be found on the sketch. Kept down to the fit-the-house
+           zoom, shrinking a little, since that is the view used on site. */
+        var wl=String(j+1),here=(j===lastWall),nh=Math.round(Math.max(15,20*hs));
+        ctx.font='700 '+Math.round(Math.max(10,12*hs))+'px "IBM Plex Sans",sans-serif';
+        var bw2=Math.max(nh,ctx.measureText(wl).width+10);
+        ctx.fillStyle=here?C.acc:C.surf;ctx.strokeStyle=here?C.acc:C.miss;ctx.lineWidth=1.8;
+        rr(mx-bw2/2,my-nh/2,bw2,nh,5);ctx.fill();ctx.stroke();
+        ctx.fillStyle=here?cssvar('--accent-ink'):C.miss;ctx.fillText(wl,mx,my+.5);
+        continue;
+      }
       var bs=Math.max(4.5,7.5*hs);
       ctx.fillStyle=C.surf;ctx.strokeStyle=C.miss;ctx.lineWidth=Math.max(1.2,1.8*hs);
       rr(mx-bs,my-bs,bs*2,bs*2,bs/2.1);ctx.fill();ctx.stroke();
@@ -991,6 +1011,24 @@ function paint(){
       ctx.fillStyle=C.ink2;ctx.fillText(gt,GP.x+14,GP.y+13);
     }
     ctx.textAlign='center';
+  }
+  /* where the numbering starts, and which way it runs */
+  if(S.closed&&n>=3&&!bare){
+    var c0=W2S(S.pts[0]),c1=W2S(S.pts[1]);
+    var dx=c1.x-c0.x,dy=c1.y-c0.y,dl=Math.sqrt(dx*dx+dy*dy);
+    if(dl>60&&!tiny){
+      /* a chevron on wall 1, a third of the way along, pointing to wall 2 */
+      var ux=dx/dl,uy=dy/dl,ax=c0.x+dx*.3,ay=c0.y+dy*.3,ah=7;
+      ctx.strokeStyle=C.acc;ctx.lineWidth=3;
+      ctx.beginPath();
+      ctx.moveTo(ax-ux*ah-uy*ah,ay-uy*ah+ux*ah);ctx.lineTo(ax,ay);ctx.lineTo(ax-ux*ah+uy*ah,ay-uy*ah-ux*ah);
+      ctx.stroke();
+    }
+    ctx.fillStyle=C.acc;ctx.beginPath();ctx.arc(c0.x,c0.y,Math.max(5,10*hs),0,6.284);ctx.fill();
+    if(!tiny){
+      ctx.fillStyle=cssvar('--accent-ink');ctx.font='700 11px "IBM Plex Sans",sans-serif';
+      ctx.fillText('1',c0.x,c0.y+.5);
+    }
   }
   if(S.pts.length>2&&!S.closed){
     var F0=W2S(S.pts[0]);
@@ -3541,7 +3579,10 @@ function render(){
     fb.dataset.mode='check';
     fb.style.background='var(--ok)';
   }else{
-    fb.textContent=total>1?('Next ('+total+')'):'Find it';
+    var bwLeft=0;for(var q3=0;q3<segCount();q3++)if(!wallLen(q3))bwLeft++;
+    fb.innerHTML='';
+    fb.appendChild(document.createTextNode(bwLeft?'Next wall ›':'Next ›'));
+    var fbs=document.createElement('small');fbs.textContent=total+' left';fb.appendChild(fbs);
     fb.dataset.mode='find';
     fb.style.background='';
   }
