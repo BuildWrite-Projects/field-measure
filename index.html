@@ -1496,20 +1496,49 @@ function fitRoom(auto){
     var m=dim16(wallLen(i));
     if(m){L0.push(m/16);meas.push(true);anyMeas=true;}else{L0.push(len);meas.push(false);}
   }
+  /* whole runs measured straight across a jog: each is one more total the
+     walls along that line have to add up to */
+  var runRows=[];
+  for(i=0;i<n;i++){
+    var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len)continue;
+    var sp0=runSpan(i);if(!sp0||sp0.from!==i||sp0.to!==wr.to)continue;
+    var R16=dim16(wr.len);if(!R16)continue;
+    var ud=dirs[i],coef=new Array(n).fill(0);
+    for(var m3=i;;m3=(m3+1)%n){coef[m3]=dirs[m3].x*ud.x+dirs[m3].y*ud.y;if(m3===wr.to)break;}
+    runRows.push({coef:coef,target:R16/16});anyMeas=true;
+  }
   if(!anyMeas){if(!auto){say('Measure at least one wall first.');render();}return null;}
   /* how far the walls, at these lengths, miss closing */
   var ex=0,ey=0;for(i=0;i<n;i++){ex+=dirs[i].x*L0[i];ey+=dirs[i].y*L0[i];}
-  function solve(wt){
-    var a=0,b=0,c=0;
-    for(var k=0;k<n;k++){a+=wt[k]*dirs[k].x*dirs[k].x;b+=wt[k]*dirs[k].x*dirs[k].y;c+=wt[k]*dirs[k].y*dirs[k].y;}
-    var det=a*c-b*b;if(Math.abs(det)<1e-9)return null;
-    var lx=-(c*ex-b*ey)/det,ly=-(-b*ex+a*ey)/det;
-    return dirs.map(function(d,k){return wt[k]*(d.x*lx+d.y*ly);});
+  /* Smallest change to the lengths (weighted: unmeasured walls give first)
+     that makes the room close and every whole run add up:
+     rows A, targets b; change = W A' (A W A')^-1 b. */
+  function solve(wt,useRuns){
+    var rows=[{coef:dirs.map(function(d){return d.x;}),b:-ex},{coef:dirs.map(function(d){return d.y;}),b:-ey}];
+    if(useRuns)runRows.forEach(function(r){
+      var s=0;for(var k=0;k<n;k++)s+=r.coef[k]*L0[k];
+      rows.push({coef:r.coef,b:r.target-s});
+    });
+    var R=rows.length,M=[],bb=[];
+    for(var p=0;p<R;p++){M.push([]);bb.push(rows[p].b);
+      for(var q=0;q<R;q++){var s2=0;for(var k=0;k<n;k++)s2+=rows[p].coef[k]*wt[k]*rows[q].coef[k];M[p].push(s2);}}
+    /* Gaussian elimination */
+    for(var c=0;c<R;c++){
+      var piv=c;for(var r2=c+1;r2<R;r2++)if(Math.abs(M[r2][c])>Math.abs(M[piv][c]))piv=r2;
+      if(Math.abs(M[piv][c])<1e-9)return null;
+      var tmp=M[c];M[c]=M[piv];M[piv]=tmp;var tb=bb[c];bb[c]=bb[piv];bb[piv]=tb;
+      for(r2=0;r2<R;r2++){if(r2===c)continue;var f=M[r2][c]/M[c][c];
+        for(var c2=c;c2<R;c2++)M[r2][c2]-=f*M[c][c2];bb[r2]-=f*bb[c];}
+    }
+    var lam=bb.map(function(x,p){return x/M[p][p];});
+    var out=[];for(var k=0;k<n;k++){var s3=0;for(p=0;p<R;p++)s3+=rows[p].coef[k]*lam[p];out.push(wt[k]*s3);}
+    return out;
   }
   /* unmeasured walls give first; measured ones only if they must */
   for(i=0;i<n;i++)w.push(meas[i]?0.001:1);
-  var del=solve(w);
-  if(!del){w=w.map(function(){return 1;});del=solve(w);}
+  var del=solve(w,true);
+  if(!del){w=w.map(function(){return 1;});del=solve(w,true);}
+  if(!del)del=solve(w,false);         /* a run that can't be met: close the room without it */
   if(!del){if(!auto){say('Couldn’t fit this shape.');render();}return null;}
   var L=L0.map(function(x,k){return x+del[k];});
   if(L.some(function(x){return x<0.5;})){
@@ -1552,14 +1581,15 @@ function fitRoom(auto){
   movedIdx.forEach(function(si){
     j.shapes[si].pts.forEach(function(q){q.x=rnd(q.x+moves[si].x);q.y=rnd(q.y+moves[si].y);});
   });
-  var worst=0,worstWall=-1;
-  for(i=0;i<n;i++)if(meas[i]&&Math.abs(del[i])>worst){worst=Math.abs(del[i]);worstWall=i;}
+  var worst=0,worstWall=-1,offTot=0;
+  for(i=0;i<n;i++)if(meas[i]){offTot+=Math.abs(del[i]);if(Math.abs(del[i])>worst){worst=Math.abs(del[i]);worstWall=i;}}
+  /* how much the measured walls had to give, all told */
+  var offTxt=fmt16(Math.round(offTot*16));
   var msg='Fitted.';
   if(movedIdx.length)msg+=' Moved '+movedIdx.map(function(si){return j.shapes[si].name;}).join(', ')+' with it.';
-  if(worst>=1/16)msg+=' Measured walls are '+fmt16(Math.round(Math.hypot(ex,ey)*16))+
-    ' off — re-check wall '+(worstWall+1)+'.';
-  FMLog.add('fit',{room:curShape().name,auto:!!auto,moved:movedIdx.map(function(si){return j.shapes[si].name;}),off16:Math.round(Math.hypot(ex,ey)*16)});
-  if(auto)return{msg:(worst>=1/16)?('Measured walls are '+fmt16(Math.round(Math.hypot(ex,ey)*16))+' off — re-check wall '+(worstWall+1)+'.'):'',
+  if(worst>=1/16)msg+=' Measured walls are '+offTxt+' off — re-check wall '+(worstWall+1)+'.';
+  FMLog.add('fit',{room:curShape().name,auto:!!auto,runs:runRows.length,moved:movedIdx.map(function(si){return j.shapes[si].name;}),off16:Math.round(offTot*16)});
+  if(auto)return{msg:(worst>=1/16)?('Measured walls are '+offTxt+' off — re-check wall '+(worstWall+1)+'.'):'',
     moved:movedIdx.map(function(si){return j.shapes[si].name;})};
   say(msg);render();return null;
 }
@@ -1567,13 +1597,14 @@ function fitRoom(auto){
 function autoFitOn(){return isInt()&&cur().inch&&cur().autoFit!==false&&S.closed&&!S.locked;}
 /* Save a wall's length the auto-fit way: one step of history holding the
    room and every other room on the floor, then the length, then the fit. */
-function saveLenAuto(i,v){
+function saveLenAuto(i,v,sp,rv){
   var j=cur(),all=[];
   (j.shapes||[]).forEach(function(sh,si){if(si!==j.active&&sh.pts&&sh.pts.length)all.push(si);});
   var snap=stateStr(all);
   hist.push(snap);if(hist.length>60)hist.shift();future=[];
   setWallLen(i,v);applyGaps(i);
-  var r=v?fitRoom(true):null;
+  if(sp)setRun(sp,rv);
+  var r=(v||rv)?fitRoom(true):null;
   return{snap:snap,res:r};
 }
 /* ---------- going round a room, not through it ----------
@@ -3343,22 +3374,55 @@ document.getElementById('cancel').addEventListener('click',function(){
 });
 sheet.addEventListener('click',function(e){if(e.target===sheet)document.getElementById('cancel').click();});
 
+/* ---------- whole runs ----------
+   A straight wall broken by a dormer or a jog is several walls in the
+   drawing (1, the jog's 2-3-4, then 5 carrying on the same line). One long
+   shot straight across, end to end, is more accurate than measuring each
+   piece. runSpan(i) finds the straight line wall i sits on: the first and
+   last walls along it, with a jog between. The measurement lives on the
+   first wall of the run: walls[from].run = {to, len}. */
+function wallDir(i){var s=seg(i),dx=s[1].x-s[0].x,dy=s[1].y-s[0].y,l=Math.hypot(dx,dy)||1;return{x:dx/l,y:dy/l,A:s[0]};}
+function sameLine(i,k){
+  var a=wallDir(i),b=wallDir(k);
+  if(a.x*b.x+a.y*b.y<0.999)return false;
+  return Math.abs((b.A.x-a.A.x)*(-a.y)+(b.A.y-a.A.y)*a.x)<0.5;
+}
+function runSpan(i){
+  var n=segCount();if(!S.closed||n<5)return null;
+  var d=wallDir(i),from=i,to=i;
+  for(var st=1;st<n;st++){var k=(i+st)%n,dk=wallDir(k);if(d.x*dk.x+d.y*dk.y<-0.5)break;if(sameLine(i,k))to=k;}
+  for(st=1;st<n;st++){var k2=(i-st+n)%n,dk2=wallDir(k2);if(d.x*dk2.x+d.y*dk2.y<-0.5)break;if(sameLine(i,k2))from=k2;}
+  if(from===to)return null;
+  var A=seg(from)[0],B=seg(to)[1];
+  return{from:from,to:to,drawn:Math.abs((B.x-A.x)*d.x+(B.y-A.y)*d.y)};
+}
+function runOf(sp){var w=S.walls[sp.from];return(w&&w.run&&w.run.to===sp.to)?w.run.len:'';}
+function setRun(sp,v){
+  if(!S.walls[sp.from])S.walls[sp.from]={};
+  if(v)S.walls[sp.from].run={to:sp.to,len:v};else delete S.walls[sp.from].run;
+}
+function runLabel(sp){return 'Whole run, walls '+(sp.from+1)+'–'+(sp.to+1)+' (straight across)';}
 function askLength(i){
   SHremove=null;
   var prevLast=lastWall,prevVal=wallLen(i);
   lastWall=i;
+  var sp=isInt()?runSpan(i):null,prevRun=sp?runOf(sp):'';
+  var fields=[{label:'Length',value:prevVal}];
+  if(sp)fields.push({label:runLabel(sp),value:prevRun});
   openSheet({title:'Wall '+(i+1)+' — length',
-    fields:[{label:'Length',value:prevVal}],
+    fields:fields,
     done:function(v){
-      if(autoFitOn()&&v[0]){
+      var rv=sp?(v[1]||''):null;
+      if(autoFitOn()&&(v[0]||rv)){
         /* the room takes the length straight away; Back or Undo puts it all back */
-        var af=saveLenAuto(i,v[0]);
+        var af=saveLenAuto(i,v[0],sp,rv);
         recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();},prevLast);
-        selectNextWall(i);
+        if(v[0])selectNextWall(i);
         if(af.res&&af.res.msg)say(af.res.msg);
       }else{
-        recordMeas(function(){setWallLen(i,prevVal);},prevLast);
+        recordMeas(function(){setWallLen(i,prevVal);if(sp)setRun(sp,prevRun);},prevLast);
         setWallLen(i,v[0]);applyGaps(i);
+        if(sp)setRun(sp,rv);
         if(v[0])selectNextWall(i);
       }
       render();
@@ -4416,6 +4480,9 @@ function summaryText(){
       }
       for(var i=0;i<n;i++){
         out.push('  Wall '+(i+1)+'  '+(showLen(wallLen(i))||'— MISSING —'));
+        var wrun=S.walls[i]&&S.walls[i].run;
+        if(inside&&wrun&&wrun.len)
+          out.push('      whole run, walls '+(i+1)+'-'+(wrun.to+1)+' straight across:  '+showLen(wrun.len));
         wallOpenings(i).forEach(function(oi){
           var o=S.openings[oi];
           out.push('      '+kindLabel(kindOf(o))+'  '+
@@ -4511,6 +4578,21 @@ function render(){
       view.appendChild(rowBtn('Wall '+(j+1),cnt?(cnt+' opening'+(cnt>1?'s':'')):null,
         showLen(wallLen(j)),function(){askLength(j);}));
     })(j);}
+    /* straight runs broken by a jog, each measurable in one shot */
+    if(isInt()&&S.closed){
+      var seenRun={};
+      for(var jr=0;jr<n;jr++){(function(jr){
+        var sp=runSpan(jr);if(!sp)return;
+        /* one row per distinct span: the same stretch found along two
+           parallel walls (a dormer's top and bottom) is one measurement */
+        /* a run measures between the two walls at its ends; between the same
+           two walls it's the same distance whichever line it's taken along */
+        var key2=[(sp.from-1+n)%n,(sp.to+1)%n].sort(function(a,b){return a-b;}).join(':');
+        if(seenRun[key2])return;seenRun[key2]=1;
+        view.appendChild(rowBtn('Whole run, walls '+(sp.from+1)+'–'+(sp.to+1),'straight across the jog',
+          showLen(runOf(sp)),function(){askLength(sp.from);}));
+      })(jr);}
+    }
   }else if(S.tab==='openings'){
     var tot=S.openings.length,ok=S.openings.filter(function(o){return o.w&&o.h;}).length;
     view.appendChild(el('div','tally'+(tot&&ok===tot?' done':''),
