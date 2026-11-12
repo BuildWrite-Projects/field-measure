@@ -2325,7 +2325,7 @@ function distoCommit(){
     DISTO.on=!DISTO.on;
     try{localStorage.setItem('fieldmeasure.disto',DISTO.on?'1':'0');}catch(e){}
     paintBtn();
-    if(DISTO.on){distoFocus();say('Disto on. Select a wall, then shoot it and send.');}
+    if(DISTO.on){distoFocus();say('Disto on (app v13). Select a wall, then shoot it and send.');}
     else{try{ci.blur();}catch(e){}say('Disto off.');}
     render();
   });
@@ -2333,8 +2333,19 @@ function distoCommit(){
   document.addEventListener('click',function(){distoFocus();});
   /* what the laser typed lands in the box */
   ci.addEventListener('input',function(){
-    if(!(SH&&!sheet.hidden)&&!distoDirectOK()){ci.value='';DISTO.buf='';return;}
+    if(!(SH&&!sheet.hidden)&&!distoDirectOK()){
+      /* say why nothing happened, rather than dropping it silently */
+      var got=ci.value.trim();ci.value='';DISTO.buf='';
+      if(got){
+        say(S.mode!=='measure'
+          ? 'The Disto sent '+got+', but you’re not in Measure. Tap Measure, tap a wall, then send again.'
+          : 'The Disto sent '+got+', but no wall is selected. Tap a wall, then send again.');
+        render();
+      }
+      return;
+    }
     DISTO.buf=ci.value;
+    say('Disto: receiving '+ci.value.trim()+'…');render();
     if(DISTO.timer)clearTimeout(DISTO.timer);
     DISTO.timer=setTimeout(distoCommit,700);
   });
@@ -2353,7 +2364,15 @@ document.addEventListener('keydown',function(e){
   if(fromCatcher&&k&&k.length===1)return;
   if(!(SH&&!sheet.hidden)){
     /* no entry box: only a selected wall in Measure takes a reading */
-    if(!distoDirectOK())return;
+    if(!distoDirectOK()){
+      if(k&&k.length===1&&/[0-9]/.test(k)&&!DISTO.warned){
+        DISTO.warned=true;setTimeout(function(){DISTO.warned=false;},3000);
+        say(S.mode!=='measure'?'A Disto reading came in. Tap Measure, then tap a wall.'
+          :'A Disto reading came in, but no wall is selected. Tap a wall, then send again.');
+        render();
+      }
+      return;
+    }
     if(k==='Enter'||k==='Tab'){
       e.preventDefault();
       if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
