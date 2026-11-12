@@ -1080,6 +1080,14 @@ function paint(){
     var hs0=seg(lastWall),HA=W2S(hs0[0]),HB=W2S(hs0[1]);
     ctx.save();ctx.globalAlpha=.35;ctx.strokeStyle=C.acc;ctx.lineWidth=Math.max(10,18*hs);
     ctx.beginPath();ctx.moveTo(HA.x,HA.y);ctx.lineTo(HB.x,HB.y);ctx.stroke();ctx.restore();
+    /* on a straight run: a dashed line straight across the jog, end to end,
+       showing what one long shot covers */
+    var spR=isInt()?runSpan(lastWall):null;
+    if(spR){
+      var RA=W2S(seg(spR.from)[0]),RB=W2S(seg(spR.to)[1]);
+      ctx.save();ctx.strokeStyle=C.acc;ctx.lineWidth=2;ctx.setLineDash([7,5]);
+      ctx.beginPath();ctx.moveTo(RA.x,RA.y);ctx.lineTo(RB.x,RB.y);ctx.stroke();ctx.restore();
+    }
   }
   for(var i=0;i<n;i++){
     var s=seg(i),has=!!(wallLen(i)||woP[i]),A=W2S(s[0]),B=W2S(s[1]);
@@ -3224,6 +3232,38 @@ function distoDirectOK(){
   for(var q=0;q<ids.length;q++){var e=document.getElementById(ids[q]);if(e&&!e.hidden)return false;}
   return true;
 }
+/* a Disto reading saved as the whole run the selected wall sits on */
+function distoRun(i,sp,t){
+  var txt=(units()==='in'?fmtInches(t):fmtFtIn(t)),prevRun=runOf(sp),flag='';
+  if(autoFitOn()){
+    var af=saveLenAuto(i,wallLen(i),sp,txt);
+    recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();checkAutoUnlock();},i);
+    if(af.res&&af.res.msg)flag=' '+af.res.msg;
+  }else{
+    recordMeas(function(){setRun(sp,prevRun);checkAutoUnlock();},i);
+    setRun(sp,txt);
+  }
+  flag+=checkAutoLock();
+  FMLog.add('distoRun',{from:sp.from,to:sp.to,len:txt});
+  var moved=selectNextWall(i);
+  say('✓ Taken as the whole run, walls '+(sp.from+1)+'–'+(sp.to+1)+': '+fmtFtIn(t)+'.'+
+    (moved?' Now on wall '+(lastWall+1)+'.':'')+flag);
+  render();
+}
+/* too close to call: ask once */
+function askRunOrWall(i,sp,raw){
+  var t=distoTo16(raw);
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle','Got '+fmtFtIn(t)));
+  mbox.appendChild(el('div','sub','Is that straight across, walls '+(sp.from+1)+'–'+(sp.to+1)+', or just wall '+(i+1)+'?'));
+  var b1=el('button','mbtn mprimary','Straight across, walls '+(sp.from+1)+'–'+(sp.to+1));
+  b1.addEventListener('click',function(){closeModal();distoRun(i,sp,t);});
+  var b2=el('button','mbtn msecondary','Just wall '+(i+1));
+  b2.addEventListener('click',function(){closeModal();distoDirectWall(i,t);});
+  var b3=el('button','mbtn msecondary','Neither — skip it');
+  b3.addEventListener('click',closeModal);
+  mbox.appendChild(b1);mbox.appendChild(b2);mbox.appendChild(b3);
+}
 function distoDirect(raw){
   var i=lastWall,t=distoTo16(raw);
   if(t===null){
@@ -3234,6 +3274,23 @@ function distoDirect(raw){
   }
   if(t<=0){say('Got a zero reading. Nothing was filled in.');render();return;}
   if(roomLockedNow()){say(curShape().name+' is locked (it’s finished). Hold its name and choose Unlock to change it.');render();return;}
+  /* The selected wall sits on a straight run that hasn't been shot yet:
+     the reading could be the whole run or just this wall. Tell them apart
+     by size against the drawing; ask only when it's too close to call. */
+  var spD=isInt()?runSpan(i):null;
+  if(spD&&!runOf(spD)){
+    var sgD=seg(i),wallDrawn=Math.hypot(sgD[1].x-sgD[0].x,sgD[1].y-sgD[0].y),r=t/16;
+    var sc=cur().inch?1:(floorScale()/16||1);              /* drawing units to inches */
+    var wD=wallDrawn*sc,rD=spD.drawn*sc;
+    var eW=Math.abs(r-wD)/(wD||1),eR=Math.abs(r-rD)/(rD||1);
+    var asRun=(eR<eW*0.6)?true:(eW<eR*0.6)?false:null;
+    if(asRun===null){askRunOrWall(i,spD,raw);return;}
+    if(asRun){distoRun(i,spD,t);return;}
+  }
+  distoDirectWall(i,t);
+}
+/* a Disto reading saved as the selected wall's own length */
+function distoDirectWall(i,t){
   var prevVal=wallLen(i),txt=(units()==='in'?fmtInches(t):fmtFtIn(t));
   var flag='';
   if(autoFitOn()){
@@ -3547,24 +3604,27 @@ function askLength(i){
   var prevLast=lastWall,prevVal=wallLen(i);
   lastWall=i;
   var sp=isInt()?runSpan(i):null,prevRun=sp?runOf(sp):'';
-  var fields=[{label:'Length',value:prevVal}];
-  if(sp)fields.push({label:runLabel(sp),value:prevRun});
+  /* On a straight run broken by a jog, the run comes first and is the box
+     that's highlighted: one long shot straight across is the one to take. */
+  var fields=sp?[{label:'Straight across, walls '+(sp.from+1)+'–'+(sp.to+1)+' (past the jog)',value:prevRun},
+                 {label:'Just wall '+(i+1),value:prevVal}]
+               :[{label:'Length',value:prevVal}];
   openSheet({title:'Wall '+(i+1)+' — length',
     fields:fields,
     done:function(v){
-      var rv=sp?(v[1]||''):null;
-      if(autoFitOn()&&(v[0]||rv)){
+      var rv=sp?(v[0]||''):null,wv=sp?(v[1]||''):v[0];
+      if(autoFitOn()&&(wv||rv)){
         /* the room takes the length straight away; Back or Undo puts it all back */
-        var af=saveLenAuto(i,v[0],sp,rv);
+        var af=saveLenAuto(i,wv,sp,rv);
         recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();checkAutoUnlock();},prevLast);
-        if(v[0])selectNextWall(i);
+        if(wv||rv)selectNextWall(i);
         var lk=checkAutoLock();
         if((af.res&&af.res.msg)||lk)say((((af.res&&af.res.msg)||'')+lk).trim());
       }else{
         recordMeas(function(){setWallLen(i,prevVal);if(sp)setRun(sp,prevRun);checkAutoUnlock();},prevLast);
-        setWallLen(i,v[0]);applyGaps(i);
+        setWallLen(i,wv);applyGaps(i);
         if(sp)setRun(sp,rv);
-        if(v[0])selectNextWall(i);
+        if(wv||rv)selectNextWall(i);
         var lk2=checkAutoLock();if(lk2)say(lk2.trim());
       }
       render();
