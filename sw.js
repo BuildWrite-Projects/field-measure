@@ -7,7 +7,7 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v31';
+var VERSION = 'fm-v32';
 /* fm-v29: auto-fit to measurements (interior) */
 var CORE = [
   './',

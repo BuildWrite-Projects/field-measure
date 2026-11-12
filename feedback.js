@@ -49,6 +49,7 @@
     ta.setAttribute('maxlength', '5000');
     ta.placeholder = 'e.g. Picking a division takes too many taps on site';
     box.appendChild(ta);
+    if (opts.hint) box.appendChild(el('div', 'font-size:12px;color:#666', opts.hint));
     var msg = el('div', 'font-size:13px;min-height:18px;color:#555', '');
     box.appendChild(msg);
     var row = el('div', 'display:flex;gap:10px');

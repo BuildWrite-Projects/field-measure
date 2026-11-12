@@ -16,7 +16,8 @@
     var hdr = document.getElementById('hdr');
     if (hdr && window.BWFeedback) BWFeedback.mount({ app: 'field-measure', into: hdr, before: document.getElementById('sync'),
       client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-12',
-      extra: function () { return window.FMLog ? FMLog.text() : ''; } });
+      extra: function () { return window.FMLog ? FMLog.text() : ''; },
+      hint: 'No keyboard? With the Disto paired, the iPhone hides its own: hold the Disto’s arrow key for a second to bring it up, or switch the Disto off while you type.' });
   });
 </script>
 </head><body>
@@ -1459,6 +1460,26 @@ function roomAdj(pts,skip){
   }
   return out;
 }
+function fitAnchor(P,j){
+  var skip={};skip[j.active]=true;
+  var adj=roomAdj(P,skip),n=P.length;
+  if(!adj.length)return 0;
+  function measured(si){return (j.shapes[si].walls||[]).filter(function(w){return w&&w.len;}).length;}
+  var best=null,bs=-1;
+  adj.forEach(function(a){
+    var A=P[a.wall],B=P[(a.wall+1)%n];
+    var sc=measured(a.si)*1000+Math.hypot(B.x-A.x,B.y-A.y);
+    if(sc>bs){bs=sc;best=a;}
+  });
+  var i=best.wall,A=P[i],B=P[(i+1)%n],L=Math.hypot(B.x-A.x,B.y-A.y)||1;
+  var ux=(B.x-A.x)/L,uy=(B.y-A.y)/L;
+  /* the end that shares a line with one of the neighbour's corners */
+  var Q=j.shapes[best.si].pts||[];
+  function lined(E){var te=E.x*ux+E.y*uy;return Q.some(function(q){return Math.abs(q.x*ux+q.y*uy-te)<0.5;});}
+  if(lined(A))return i;
+  if(lined(B))return (i+1)%n;
+  return i;
+}
 function fitRoom(auto){
   if(!isInt())return null;
   var j=cur();
@@ -1494,8 +1515,18 @@ function fitRoom(auto){
   if(L.some(function(x){return x<0.5;})){
     if(!auto){say('These measurements can’t make this shape — a wall would shrink to nothing. Check the lengths.');render();}return{msg:'These measurements can’t make this shape — check the lengths.'};
   }
-  var NP=[{x:P[0].x,y:P[0].y}];
-  for(i=0;i<n-1;i++)NP.push({x:NP[i].x+dirs[i].x*L[i],y:NP[i].y+dirs[i].y*L[i]});
+  /* Which corner holds still. Not whichever was tapped first: the room stays
+     against the room it's built against. The wall shared with the neighbour
+     that has the most measured walls (then the longest such wall) is held,
+     and along it the end that lines up with that neighbour's own walls, so
+     a line carrying on through both rooms stays straight. A room touching
+     nothing keeps corner 1. */
+  var k0=fitAnchor(P,j);
+  var NP=new Array(n);NP[k0]={x:P[k0].x,y:P[k0].y};
+  for(var m2=0;m2<n-1;m2++){
+    var ii=(k0+m2)%n,nx2=(ii+1)%n;
+    NP[nx2]={x:NP[ii].x+dirs[ii].x*L[ii],y:NP[ii].y+dirs[ii].y*L[ii]};
+  }
   NP=NP.map(function(q){return{x:rnd(q.x),y:rnd(q.y)};});
   /* rooms that move with it, and the rooms against those */
   var moves={},skip={},queue=[];skip[j.active]=true;
@@ -3195,6 +3226,8 @@ function distoCommit(){
      keyboard bar, which shook the drawing, so it is never held while drawing
      and never re-focused when it already has focus. */
   window.distoWanted=function(){
+    /* a box you type words into (Feedback) is open: leave the typing to it */
+    if(document.querySelector('textarea'))return false;
     return DISTO.on&&((SH&&!sheet.hidden)||(S.mode==='measure'&&lastWall>=0&&lastWall<segCount()));
   };
   window.distoFocus=function(){
