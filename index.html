@@ -2467,6 +2467,9 @@ function selectNextWall(from){
     var k=(((from+nextDir*step)%n)+n)%n;
     if(!wallLen(k)){selectWall(k,true);return true;}
   }
+  /* all done: let go of the last wall so nothing still looks like it needs
+     attention */
+  lastWall=-1;flashAt=null;
   say('Every wall has a length.');
   return false;
 }
