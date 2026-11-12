@@ -556,8 +556,10 @@ function readDB(){
    through its prototype; those are never stored on the floor. */
 function curJob(){return DB.jobs[DB.active];}
 function blankFloor(name){
+  /* inch:true - drawn at a fixed scale, one drawing unit to the inch, so the
+     wall between rooms is exactly its thickness from the very first room */
   return{floor:name,shapes:[blankShape('Room 1')],active:0,heights:{},ridges:[],heightsOff:{},
-    snap:90,view:{ox:0,oy:0,s:1},locked:false,wallT:'4 1/2"'};
+    snap:90,view:{ox:0,oy:0,s:1},locked:false,wallT:'4 1/2"',inch:true};
 }
 function ensureFloor(f){
   if(!f.shapes||!f.shapes.length)f.shapes=[blankShape('Room 1')];
@@ -1200,7 +1202,7 @@ function paint(){
 }
 
 function snapPoint(p){
-  if(!S.snap||!S.pts.length)return{x:Math.round(p.x),y:Math.round(p.y)};
+  if(!S.snap||!S.pts.length)return{x:rnd(p.x),y:rnd(p.y)};
   var L=S.pts[S.pts.length-1],dx=p.x-L.x,dy=p.y-L.y;
   var q;
   if(S.snap===90){
@@ -1230,7 +1232,7 @@ function snapPoint(p){
     if(bx!==null)q.x=bx;
     if(by!==null)q.y=by;
   }
-  return{x:Math.round(q.x),y:Math.round(q.y)};
+  return{x:rnd(q.x),y:rnd(q.y)};
 }
 /* ---------- rooms that snap together ----------
    A corner tapped close to a wall of another room on this floor lands one
@@ -1293,9 +1295,14 @@ function drawnGap(){
   gaps.sort(function(x,y){return x-y;});
   return gaps[gaps.length>>1];
 }
+/* Rounding for corners: to the quarter inch on an inch-scale floor (so a
+   4 1/2" wall stays 4 1/2"), to whole units elsewhere as before. */
+function rnd(v){return (isInt()&&cur().inch)?Math.round(v*4)/4:Math.round(v);}
 function roomRings(){
   var j=cur(),out=[];if(!j||!j.shapes)return out;
-  var g=drawnGap(),fsc=g?0:floorScale(),t=g||(fsc?wallThick16()/fsc:6);
+  var t;
+  if(j.inch)t=wallThick16()/16;          /* inch scale: exactly the wall */
+  else{var g=drawnGap(),fsc=g?0:floorScale();t=g||(fsc?wallThick16()/fsc:6);}
   j.shapes.forEach(function(sh,si){
     if(si===j.active||!sh.closed||!sh.pts||sh.pts.length<3)return;
     var P=sh.pts,n=P.length;
@@ -1376,10 +1383,10 @@ function roomSnap(q,screenP,vR,eR){
       }
     }
   });
-  if(bv)return{pt:{x:Math.round(bv.pt.x),y:Math.round(bv.pt.y)},room:bv.room,keys:bv.keys};
+  if(bv)return{pt:{x:rnd(bv.pt.x),y:rnd(bv.pt.y)},room:bv.room,keys:bv.keys};
   if(be){
     var o=(q.x-be.O.x)*be.nrm.x+(q.y-be.O.y)*be.nrm.y;
-    return{pt:{x:Math.round(q.x-be.nrm.x*o),y:Math.round(q.y-be.nrm.y*o)},room:be.room,keys:be.keys};
+    return{pt:{x:rnd(q.x-be.nrm.x*o),y:rnd(q.y-be.nrm.y*o)},room:be.room,keys:be.keys};
   }
   return null;
 }
@@ -1422,7 +1429,7 @@ function routeAround(L,P,r){
   function clear(path){var p=[L].concat(path,[P]);for(var i=1;i<p.length;i++)if(crossesRing(p[i-1],p[i]))return false;return true;}
   var okF=clear(f),okB=clear(bk);
   var pick=(okF&&!okB)?f:(okB&&!okF)?bk:(len(f)<=len(bk)?f:bk);
-  return pick.map(function(q){return{x:Math.round(q.x),y:Math.round(q.y)};});
+  return pick.map(function(q){return{x:rnd(q.x),y:rnd(q.y)};});
 }
 /* L is the last corner, q0 where the corner was going before any snap (so on
    the line being walked), P where it ended up. If L->P isn't square (or a
@@ -1449,7 +1456,7 @@ function squareTurn(L,q0,P){
     if(dd<bd){bd=dd;best=K;}
   }
   if(!best)return null;
-  return{x:Math.round(best.x),y:Math.round(best.y)};
+  return{x:rnd(best.x),y:rnd(best.y)};
 }
 /* A corner that would land inside a room already drawn (or inside the wall
    around it) is pushed out onto the nearest edge of that room's ring. */
@@ -1473,7 +1480,7 @@ function keepOutside(q){
       var X=segX(Ra.off[i],Ra.off[(i+1)%Ra.off.length],Rb.off[k],Rb.off[(k+1)%Rb.off.length]);
       if(!X)continue;
       var dX=Math.hypot(q.x-X.x,q.y-X.y);
-      if(dX<bd&&ringWhere(X,-1,rings)!=='in'){bd=dX;best={pt:{x:Math.round(X.x),y:Math.round(X.y)},room:Ra.name,keys:[Ra.si+':'+i,Rb.si+':'+k]};}
+      if(dX<bd&&ringWhere(X,-1,rings)!=='in'){bd=dX;best={pt:{x:rnd(X.x),y:rnd(X.y)},room:Ra.name,keys:[Ra.si+':'+i,Rb.si+':'+k]};}
     }
   }
   rings.forEach(function(R){
@@ -1483,7 +1490,7 @@ function keepOutside(q){
       var tt=Math.max(0,Math.min(1,((q.x-A.x)*dx+(q.y-A.y)*dy)/L2));
       var p={x:A.x+tt*dx,y:A.y+tt*dy},d=Math.hypot(q.x-p.x,q.y-p.y);
       if(d>=bd||ringWhere(p,R.si,rings)==='in')continue;
-      bd=d;best={pt:{x:Math.round(p.x),y:Math.round(p.y)},room:R.name,keys:[R.si+':'+i]};
+      bd=d;best={pt:{x:rnd(p.x),y:rnd(p.y)},room:R.name,keys:[R.si+':'+i]};
     }
   });
   /* nowhere outside close by (inside the walls where rooms meet): don't
