@@ -999,10 +999,24 @@ function paint(){
      from the rooms already there */
   if(isInt()&&S.mode==='draw'&&!S.closed){
     ctx.save();ctx.globalAlpha=.45;ctx.strokeStyle=C.acc;ctx.lineWidth=1.5;ctx.setLineDash([4,4]);
-    roomRings().forEach(function(r){
+    /* only the outside edge of all the rooms together: any stretch that runs
+       inside the room (or wall) next door is left out */
+    var RG=roomRings();
+    RG.forEach(function(r){
+      var n=r.off.length;
       ctx.beginPath();
-      r.off.forEach(function(q,k){var s=W2S(q);if(k)ctx.lineTo(s.x,s.y);else ctx.moveTo(s.x,s.y);});
-      ctx.closePath();ctx.stroke();
+      for(var e=0;e<n;e++){
+        var A=r.off[e],B=r.off[(e+1)%n],sa=W2S(A),sb=W2S(B);
+        var steps=Math.max(1,Math.ceil(Math.hypot(sb.x-sa.x,sb.y-sa.y)/6));
+        for(var k=0;k<steps;k++){
+          var m={x:A.x+(B.x-A.x)*(k+.5)/steps,y:A.y+(B.y-A.y)*(k+.5)/steps};
+          if(ringWhere(m,r.si,RG)==='in')continue;
+          var p1=W2S({x:A.x+(B.x-A.x)*k/steps,y:A.y+(B.y-A.y)*k/steps}),
+              p2=W2S({x:A.x+(B.x-A.x)*(k+1)/steps,y:A.y+(B.y-A.y)*(k+1)/steps});
+          ctx.moveTo(p1.x,p1.y);ctx.lineTo(p2.x,p2.y);
+        }
+      }
+      ctx.stroke();
     });
     ctx.restore();
   }
@@ -1253,6 +1267,21 @@ function roomRings(){
   });
   return out;
 }
+/* Rooms side by side share a wall, so their dotted lines overlap: each room's
+   line runs down the far face of the wall next door. Only the outside edge of
+   all of them together is real. 'in' = inside another room's line (inside
+   that room or its wall), 'on' = right on another room's line. */
+function ringWhere(pt,exceptSi,rings){
+  rings=rings||roomRings();
+  var on=false;
+  for(var k=0;k<rings.length;k++){
+    var r=rings[k];if(r.si===exceptSi)continue;
+    var d=ringDist(r,pt).d;
+    if(d<0.75){on=true;continue;}
+    if(pointInPoly(pt,r.off))return 'in';
+  }
+  return on?'on':'';
+}
 /* Snap q (where the corner would go, drawing units) using the screen spot
    that was tapped: a corner of a ring within vR pixels wins, then an edge
    within eR pixels (q slides straight onto it). */
@@ -1274,14 +1303,23 @@ function roomSnap(q,screenP,vR,eR){
         if(u1&&!u2)cp={pt:{x:P0.x+n1.x*r.t,y:P0.y+n1.y*r.t},keys:[r.si+':'+((i-1+n)%n)]};
         else if(u2&&!u1)cp={pt:{x:P0.x+n2.x*r.t,y:P0.y+n2.y*r.t},keys:[r.si+':'+i]};
         else cp={pt:r.off[i],keys:[r.si+':'+((i-1+n)%n),r.si+':'+i]};
-        bvd=d;bv={pt:cp.pt,room:r.name,keys:cp.keys};
+        /* only a real outside corner of the rooms together: not one tucked
+           against (or inside) the room next door */
+        if(!ringWhere(cp.pt,r.si,rings)){bvd=d;bv={pt:cp.pt,room:r.name,keys:cp.keys};}
       }
       var v=W2S(r.off[i]);
       var a=v,b=W2S(r.off[(i+1)%n]),dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy;if(L2<1)continue;
       var tt=((screenP.x-a.x)*dx+(screenP.y-a.y)*dy)/L2;
-      if(tt<-0.1||tt>1.1)continue;
+      /* on the stretch itself, not out past its ends (past the end is the
+         next stretch's business, or a corner's) */
+      if(tt<0||tt>1)continue;
       var de=Math.hypot(screenP.x-(a.x+tt*dx),screenP.y-(a.y+tt*dy));
-      if(de<bed){bed=de;be={O:r.off[i],nrm:r.nrm[i],room:r.name,keys:[r.si+':'+i]};}
+      if(de<bed){
+        /* not a stretch of line that runs inside the room next door */
+        var ow=r.off[i],ow2=r.off[(i+1)%n],tc=Math.max(0,Math.min(1,tt));
+        var wpt={x:ow.x+(ow2.x-ow.x)*tc,y:ow.y+(ow2.y-ow.y)*tc};
+        if(ringWhere(wpt,r.si,rings)!=='in'){bed=de;be={O:r.off[i],nrm:r.nrm[i],room:r.name,keys:[r.si+':'+i]};}
+      }
     }
   });
   if(bv)return{pt:{x:Math.round(bv.pt.x),y:Math.round(bv.pt.y)},room:bv.room,keys:bv.keys};
@@ -1326,7 +1364,10 @@ function routeAround(L,P,r){
   }
   function len(path){var p=[L].concat(path,[P]),s=0;for(var i=1;i<p.length;i++)s+=Math.hypot(p[i].x-p[i-1].x,p[i].y-p[i-1].y);return s;}
   var f=walk(1),bk=walk(-1);
-  var pick=len(f)<=len(bk)?f:bk;
+  /* the short way round, unless that way runs into the room next door */
+  function clear(path){var p=[L].concat(path,[P]);for(var i=1;i<p.length;i++)if(crossesRing(p[i-1],p[i]))return false;return true;}
+  var okF=clear(f),okB=clear(bk);
+  var pick=(okF&&!okB)?f:(okB&&!okF)?bk:(len(f)<=len(bk)?f:bk);
   return pick.map(function(q){return{x:Math.round(q.x),y:Math.round(q.y)};});
 }
 /* L is the last corner, q0 where the corner was going before any snap (so on
@@ -1360,21 +1401,20 @@ function squareTurn(L,q0,P){
    around it) is pushed out onto the nearest edge of that room's ring. */
 function keepOutside(q){
   var rings=roomRings();
-  for(var r=0;r<rings.length;r++){
-    var R=rings[r];
-    if(!pointInPoly(q,R.off))continue;
-    var best=null,bd=1e9,n=R.off.length;
+  if(ringWhere(q,-1,rings)!=='in')return null;      /* already outside, or on the line */
+  /* out to the nearest stretch of the shared outside line */
+  var best=null,bd=1e9;
+  rings.forEach(function(R){
+    var n=R.off.length;
     for(var i=0;i<n;i++){
       var A=R.off[i],B=R.off[(i+1)%n],dx=B.x-A.x,dy=B.y-A.y,L2=dx*dx+dy*dy||1;
       var tt=Math.max(0,Math.min(1,((q.x-A.x)*dx+(q.y-A.y)*dy)/L2));
-      var d=Math.hypot(q.x-(A.x+tt*dx),q.y-(A.y+tt*dy));
-      if(d<bd){bd=d;best=i;}
+      var p={x:A.x+tt*dx,y:A.y+tt*dy},d=Math.hypot(q.x-p.x,q.y-p.y);
+      if(d>=bd||ringWhere(p,R.si,rings)==='in')continue;
+      bd=d;best={pt:{x:Math.round(p.x),y:Math.round(p.y)},room:R.name,keys:[R.si+':'+i]};
     }
-    if(bd<0.75)return null;               /* already on the line */
-    var O=R.off[best],nr=R.nrm[best],o=(q.x-O.x)*nr.x+(q.y-O.y)*nr.y;
-    return{pt:{x:Math.round(q.x-nr.x*o),y:Math.round(q.y-nr.y*o)},room:R.name,keys:[R.si+':'+best]};
-  }
-  return null;
+  });
+  return best;
 }
 function hitWall(p){
   var n=segCount(),best=-1,bt=0,bd=28;
