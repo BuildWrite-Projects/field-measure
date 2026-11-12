@@ -655,7 +655,7 @@ migrateAll(DB);   /* rename old height keys before anything reads them */
    Kept in memory only; nothing is stored or sent unless Feedback is used. */
 window.FMLog=(function(){
   var buf=[];
-  function r(p){return p?[Math.round(p.x),Math.round(p.y)]:null;}
+  function r(p){return p?[Math.round(p.x*4)/4,Math.round(p.y*4)/4]:null;}
   return{
     add:function(t,o){
       try{buf.push(new Date().toTimeString().slice(0,8)+' '+t+(o?' '+JSON.stringify(o):''));}catch(e){}
@@ -672,7 +672,9 @@ window.FMLog=(function(){
           others:(j.shapes||[]).filter(function(sh,i){return i!==j.active;}).map(function(sh){return{name:sh.name,closed:!!sh.closed,
             pts:(sh.pts||[]).map(r),lens:(sh.walls||[]).map(function(w){return(w&&w.len)||'';})};})})+'\n';
       }catch(e){}
-      return head+buf.join('\n');
+      /* the layout goes LAST: a long note is trimmed from the front, so the
+         oldest taps go first and the rooms always come through */
+      return buf.join('\n')+'\n'+head;
     }
   };
 })();
@@ -1027,7 +1029,7 @@ function paint(){
   }
   /* drawing a room: show where corners will snap, a wall's thickness out
      from the rooms already there */
-  if(isInt()&&S.mode==='draw'&&!S.closed){
+  if(isInt()&&S.mode==='draw'){   /* also while adjusting a finished room */
     ctx.save();ctx.globalAlpha=.45;ctx.strokeStyle=C.acc;ctx.lineWidth=1.5;ctx.setLineDash([4,4]);
     /* only the outside edge of all the rooms together: any stretch that runs
        inside the room (or wall) next door is left out */
@@ -1583,6 +1585,32 @@ function routeAround(L,P,r){
   var okF=clear(f),okB=clear(bk);
   var pick=(okF&&!okB)?f:(okB&&!okF)?bk:(len(f)<=len(bk)?f:bk);
   return pick.map(function(q){return{x:rnd(q.x),y:rnd(q.y)};});
+}
+/* A corner sitting in a straight line between its neighbours isn't a corner:
+   it just splits one wall into two. Drop it, but only where neither wall
+   has a length or an opening on it yet, so nothing measured moves. */
+function tidyCorners(){
+  var guard=0;
+  while(guard++<40){
+    var n=S.pts.length,closed=S.closed,found=-1;
+    if(n<(closed?4:3))return;
+    for(var i=closed?0:1;i<(closed?n:n-1);i++){
+      var A=S.pts[(i-1+n)%n],B=S.pts[i],C=S.pts[(i+1)%n];
+      var cr=(B.x-A.x)*(C.y-A.y)-(B.y-A.y)*(C.x-A.x),lac=Math.hypot(C.x-A.x,C.y-A.y)||1;
+      if(Math.abs(cr)/lac>0.3)continue;
+      if((B.x-A.x)*(C.x-B.x)+(B.y-A.y)*(C.y-B.y)<=0)continue;       /* doubling back: not ours */
+      var wPrev=(i-1+n)%n,wNext=i;
+      if(wallLen(wPrev)||wallLen(wNext))continue;
+      if(S.openings.some(function(o){return o.wall===wPrev||o.wall===wNext;}))continue;
+      found=i;break;
+    }
+    if(found<0)return;
+    S.pts.splice(found,1);
+    if(S.walls.length>found)S.walls.splice(found,1);
+    S.openings.forEach(function(o){if(o.wall>found)o.wall--;});
+    if(found===0&&closed){/* corner 1 went: the wall before it now starts the ring */}
+    FMLog.add('tidy',{corner:found});
+  }
 }
 /* Add a corner; if the one before it now sits in a straight line between
    its neighbours, it isn't a corner at all, so drop it (one wall, not two). */
@@ -2573,6 +2601,21 @@ cv.addEventListener('pointermove',function(e){
         /* magnetic: pulls onto a neighbouring room's corner or wall line as
            you pass it, lets go once the finger is well past */
         var ms=roomSnap(tgW,dragAt,22,14);if(ms)tgW=ms.pt;
+        else{
+          /* no dotted line close by: line up with a nearby room's own wall
+             line instead (rooms on the same outside wall, a bath under a
+             bedroom), within a finger's width, letting go once past it */
+          var jd=cur(),tol=10/V.s,bx2=null,by2=null,dx2=tol,dy2=tol;
+          (jd.shapes||[]).forEach(function(sh,si){
+            if(si===jd.active||!sh.pts)return;
+            sh.pts.forEach(function(q){
+              if(Math.abs(q.x-tgW.x)<dx2){dx2=Math.abs(q.x-tgW.x);bx2=q.x;}
+              if(Math.abs(q.y-tgW.y)<dy2){dy2=Math.abs(q.y-tgW.y);by2=q.y;}
+            });
+          });
+          if(bx2!==null)tgW={x:bx2,y:tgW.y};
+          if(by2!==null)tgW={x:tgW.x,y:by2};
+        }
         var ko2=keepOutside(tgW);
         if(ko2&&ko2.blocked){paint();return;}   /* inside the walls: hold where it was */
         if(ko2)tgW=ko2.pt;
@@ -2618,6 +2661,12 @@ function endPtr(e){
       dragBase.forEach(function(q,i){S.pts[i].x=q.x;S.pts[i].y=q.y;});
       closeShape();
     }else if(weldTo>=0&&dragIdx>=0)mergeCorners(dragIdx,weldTo);
+    if(isInt()){
+      /* to the quarter inch, like a tapped corner, so walls that should
+         line up don't end up a fraction apart */
+      S.pts.forEach(function(q){q.x=rnd(q.x);q.y=rnd(q.y);});
+      tidyCorners();
+    }
     weldTo=-1;render();
   }
   if(!ids().length){startPt=null;moved=false;pinchD=0;pinchMid=null;dragIdx=-1;dragLive=false;dragBase=null;dragAt=null;weldTo=-1;grpIdx=-1;grpLive=false;grpBase=null;grpLock=null;save();}
