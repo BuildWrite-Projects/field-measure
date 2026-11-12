@@ -300,7 +300,15 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
       <button class="sbtn" id="lock" aria-label="Lock the drawing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 10.9V7.9a3.5 3.5 0 0 1 5.98-2.47"/><rect x="5.1" y="10.9" width="13.8" height="9.3" rx="1.7"/><circle cx="12" cy="15.5" r="1.15" fill="currentColor" stroke="none"/></svg></button>
       <button class="sbtn" id="undo">Undo</button>
       <button class="sbtn" id="redo" hidden>Redo</button>
+      <button class="sbtn" id="distobtn" aria-pressed="false">Disto</button>
     </div>
+    <!-- Catches what a Bluetooth laser "types". iPhone only hands keyboard
+         input to a page that has a typing box in focus; inputmode=none keeps
+         the on-screen keyboard from popping up. -->
+    <input id="distoin" type="text" inputmode="none" autocomplete="off" autocorrect="off"
+      autocapitalize="off" spellcheck="false" aria-hidden="true" tabindex="-1"
+      style="position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;font-size:16px;pointer-events:none">
+
     <div id="tools" hidden>
       <button class="chip" id="close" hidden>Close shape</button>
       <button class="chip" id="jog">Jog</button>
@@ -2221,7 +2229,7 @@ function distoNote(msg,bad){
 }
 /* A reading as sixteenths of an inch, or null if it can't be read safely. */
 function distoTo16(raw){
-  var s=(raw||'').trim().replace(/[′’]/g,"'").replace(/[″”]/g,'"')
+  var s=(raw||'').trim().replace(/[′’‘]/g,"'").replace(/[″”“]/g,'"')
     .replace(/''/g,'"').replace(/\s+/g,' ');
   if(!s)return null;
   var m,v;
@@ -2277,6 +2285,7 @@ function distoDirect(raw){
 function distoCommit(){
   if(DISTO.timer){clearTimeout(DISTO.timer);DISTO.timer=null;}
   var raw=DISTO.buf;DISTO.buf='';
+  var ci=document.getElementById('distoin');if(ci)ci.value='';
   if(!raw.trim())return;
   if(!SH){if(distoDirectOK())distoDirect(raw);return;}
   var f=SH.fields[SH.active];
@@ -2299,11 +2308,49 @@ function distoCommit(){
   drawFields();
   distoNote('✓ '+label+': '+fmtFtIn(t)+'  (from the Disto)');
 }
+/* The Disto button: on, the hidden catcher box keeps focus so the phone hands
+   the laser's typing to the app. Remembered on this phone only. */
+(function(){
+  var btn=document.getElementById('distobtn'),ci=document.getElementById('distoin');
+  try{DISTO.on=localStorage.getItem('fieldmeasure.disto')==='1';}catch(e){DISTO.on=false;}
+  function paintBtn(){btn.className='sbtn'+(DISTO.on?' on':'');btn.setAttribute('aria-pressed',DISTO.on?'true':'false');}
+  paintBtn();
+  window.distoFocus=function(){
+    if(!DISTO.on)return;
+    var a=document.activeElement;
+    if(a&&a!==ci&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.isContentEditable))return;
+    try{ci.focus({preventScroll:true});}catch(e){try{ci.focus();}catch(e2){}}
+  };
+  btn.addEventListener('click',function(){
+    DISTO.on=!DISTO.on;
+    try{localStorage.setItem('fieldmeasure.disto',DISTO.on?'1':'0');}catch(e){}
+    paintBtn();
+    if(DISTO.on){distoFocus();say('Disto on. Select a wall, then shoot it and send.');}
+    else{try{ci.blur();}catch(e){}say('Disto off.');}
+    render();
+  });
+  /* every tap is a chance to put focus back (iPhone only allows it during a tap) */
+  document.addEventListener('click',function(){distoFocus();});
+  /* what the laser typed lands in the box */
+  ci.addEventListener('input',function(){
+    if(!(SH&&!sheet.hidden)&&!distoDirectOK()){ci.value='';DISTO.buf='';return;}
+    DISTO.buf=ci.value;
+    if(DISTO.timer)clearTimeout(DISTO.timer);
+    DISTO.timer=setTimeout(distoCommit,700);
+  });
+})();
 document.addEventListener('keydown',function(e){
-  var t=e.target;
-  if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;
+  var t=e.target,ci=document.getElementById('distoin'),fromCatcher=(t===ci);
+  if(!fromCatcher&&t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;
   if(e.ctrlKey||e.metaKey||e.altKey)return;
   var k=e.key;
+  if((k==='Enter'||k==='Tab')&&fromCatcher){
+    /* characters come in through the box's own input event */
+    e.preventDefault();DISTO.buf=ci.value;
+    if(SH&&!sheet.hidden||distoDirectOK())distoCommit();else{ci.value='';DISTO.buf='';}
+    return;
+  }
+  if(fromCatcher&&k&&k.length===1)return;
   if(!(SH&&!sheet.hidden)){
     /* no entry box: only a selected wall in Measure takes a reading */
     if(!distoDirectOK())return;
