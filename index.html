@@ -1984,6 +1984,24 @@ function tap(p){
       }
     }
     if(isInt())delete curShape().pendCands;
+    /* Doubling back: this tap runs back along the wall just drawn, past its
+       start. That wall was a spur (a route round a room's corner that went a
+       little way up its side when the room actually turns away). Drop it, and
+       let the corner it came from move to the spot that carries that room's
+       wall line on in the direction now being walked. */
+    if(isInt()&&S.pts.length>=2){
+      var nS=S.pts.length,Ls=S.pts[nS-1],L2s=S.pts[nS-2],ws=S2W(p);
+      var ux=Ls.x-L2s.x,uy=Ls.y-L2s.y,ul=Math.hypot(ux,uy),vx=ws.x-Ls.x,vy=ws.y-Ls.y;
+      if(ul>0.5&&Math.abs(ux*vy-uy*vx)/ul<14/V.s&&ux*vx+uy*vy<0&&Math.hypot(vx,vy)>ul){
+        S.pts.pop();
+        var rcs=ringCornerCands(L2s);
+        if(rcs&&nS-3>=0){
+          var pvs=pickVia(rcs,S.pts[nS-3],L2s,ws);
+          if(pvs)S.pts[nS-2]={x:pvs.pt.x,y:pvs.pt.y};
+        }
+        FMLog.add('spur',{dropped:[Ls.x,Ls.y],corner:[S.pts[nS-2].x,S.pts[nS-2].y]});
+      }
+    }
     var np=snapPoint(S2W(p));
     if(isInt()){
       var shc=curShape(),q0=np,how=roomSnap(np,p);

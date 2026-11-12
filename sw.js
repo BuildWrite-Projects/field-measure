@@ -8,6 +8,7 @@
  * copy from cache.
  */
 var VERSION = 'fm-v28';
+/* fm-v28: interior corners carry the next room's wall line after a route */
 var CORE = [
   './',
   'index.html',
