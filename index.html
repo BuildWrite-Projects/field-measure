@@ -654,7 +654,9 @@ window.FMLog=(function(){
         head='state '+JSON.stringify({side:isInt()?'interior':'exterior',floor:isInt()?j.floor:null,
           room:curShape().name,mode:S.mode,snap:S.snap,zoom:Math.round(V.s*100)/100,closed:S.closed,
           wallT:isInt()?j.wallT:null,pts:S.pts.map(r),
-          others:(j.shapes||[]).filter(function(sh,i){return i!==j.active;}).map(function(sh){return{name:sh.name,pts:(sh.pts||[]).map(r)};})})+'\n';
+          lens:S.walls.map(function(w){return(w&&w.len)||'';}),
+          others:(j.shapes||[]).filter(function(sh,i){return i!==j.active;}).map(function(sh){return{name:sh.name,closed:!!sh.closed,
+            pts:(sh.pts||[]).map(r),lens:(sh.walls||[]).map(function(w){return(w&&w.len)||'';})};})})+'\n';
       }catch(e){}
       return head+buf.join('\n');
     }
@@ -1241,13 +1243,33 @@ function wallThick16(){var f=cur();return dim16((f&&f.wallT)||'4 1/2"')||72;}
    thickness outside it: exactly where the next room's inside faces belong.
    Its corners and edges are what new corners snap to, and nothing is allowed
    inside it. */
+/* Sixteenths of an inch per drawing unit, from every measured wall in every
+   room on this floor. One number for the whole floor: when each room used
+   its own (or a guess when it had no lengths yet), the dotted lines of two
+   rooms side by side came out different distances from their walls and
+   didn't meet. */
+function floorScale(){
+  var j=cur(),rs=[];if(!j||!j.shapes)return 0;
+  j.shapes.forEach(function(sh){
+    withShape(sh,function(){
+      var n=segCount();
+      for(var i=0;i<n;i++){
+        var L=dim16(wallLen(i));if(!L)continue;
+        var sg=seg(i),dd=Math.hypot(sg[1].x-sg[0].x,sg[1].y-sg[0].y);
+        if(dd>1)rs.push(L/dd);
+      }
+    });
+  });
+  if(!rs.length)return 0;
+  rs.sort(function(a,b){return a-b;});
+  return rs[rs.length>>1];
+}
 function roomRings(){
   var j=cur(),out=[];if(!j||!j.shapes)return out;
+  var fsc=floorScale(),t=fsc?wallThick16()/fsc:6;
   j.shapes.forEach(function(sh,si){
     if(si===j.active||!sh.closed||!sh.pts||sh.pts.length<3)return;
     var P=sh.pts,n=P.length;
-    /* drawing units per sixteenth, from this room's own measured walls */
-    var sc=withShape(sh,scaleFactor),t=sc?wallThick16()/sc:8;
     var nrm=[];
     for(var i=0;i<n;i++){
       var A=P[i],B=P[(i+1)%n],wx=B.x-A.x,wy=B.y-A.y,wl=Math.hypot(wx,wy)||1;
@@ -1295,17 +1317,20 @@ function roomSnap(q,screenP,vR,eR){
          beside one wall (sharing the other wall's line, like two rooms on
          the same outside wall), beside the other, or out past both (the
          diagonal, for a room that wraps round the corner). */
-      var C=W2S(r.pts[i]),d=Math.hypot(screenP.x-C.x,screenP.y-C.y);
-      if(d<bvd){
+      var C=W2S(r.pts[i]),dC=Math.hypot(screenP.x-C.x,screenP.y-C.y);
+      if(dC<vR*2.5){
         var n1=r.nrm[(i-1+n)%n],n2=r.nrm[i];
         var a1=(screenP.x-C.x)*n1.x+(screenP.y-C.y)*n1.y,b1=(screenP.x-C.x)*n2.x+(screenP.y-C.y)*n2.y;
         var u1=a1>6,u2=b1>6,P0=r.pts[i],cp;
         if(u1&&!u2)cp={pt:{x:P0.x+n1.x*r.t,y:P0.y+n1.y*r.t},keys:[r.si+':'+((i-1+n)%n)]};
         else if(u2&&!u1)cp={pt:{x:P0.x+n2.x*r.t,y:P0.y+n2.y*r.t},keys:[r.si+':'+i]};
         else cp={pt:r.off[i],keys:[r.si+':'+((i-1+n)%n),r.si+':'+i]};
+        /* close to the room's corner, or (zoomed in, where the snap spot sits
+           well off it) close to the snap spot itself */
+        var Sp=W2S(cp.pt),d=Math.min(dC,Math.hypot(screenP.x-Sp.x,screenP.y-Sp.y));
         /* only a real outside corner of the rooms together: not one tucked
-           against (or inside) the room next door */
-        if(!ringWhere(cp.pt,r.si,rings)){bvd=d;bv={pt:cp.pt,room:r.name,keys:cp.keys};}
+           inside the room next door */
+        if(d<bvd&&ringWhere(cp.pt,r.si,rings)!=='in'){bvd=d;bv={pt:cp.pt,room:r.name,keys:cp.keys};}
       }
       var v=W2S(r.off[i]);
       var a=v,b=W2S(r.off[(i+1)%n]),dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy;if(L2<1)continue;

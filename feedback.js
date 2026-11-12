@@ -37,13 +37,15 @@
   function el(tag, style, text) { var e = document.createElement(tag); if (style) e.style.cssText = style; if (text != null) e.textContent = text; return e; }
 
   function open() {
-    var shade = el('div', 'position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center');
+    /* At the top of the screen: from the bottom, the phone's keyboard came up
+       over the box and hid what you were typing or dictating. */
+    var shade = el('div', 'position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center');
     var box = el('div', CSS + 'width:100%;max-width:560px;max-height:100vh;overflow:auto;box-sizing:border-box;background:#fff;color:#14161a;' +
-      'border-radius:14px 14px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px;' +
-      'box-shadow:0 -8px 30px rgba(0,0,0,.25)');
+      'border-radius:0 0 14px 14px;padding:calc(16px + env(safe-area-inset-top,0px)) 16px 16px;display:flex;flex-direction:column;gap:10px;' +
+      'box-shadow:0 8px 30px rgba(0,0,0,.25)');
     box.appendChild(el('div', 'font-size:17px;font-weight:700', 'Send feedback'));
     box.appendChild(el('div', 'font-size:13px;color:#555', 'What works, what doesn’t, what would help? Short is fine.'));
-    var ta = el('textarea', CSS + 'font-size:16px;min-height:120px;padding:10px;border:1px solid #c9ccd2;border-radius:9px;resize:vertical;color:#14161a;background:#f7f7f8');
+    var ta = el('textarea', CSS + 'font-size:16px;min-height:96px;max-height:30vh;padding:10px;border:1px solid #c9ccd2;border-radius:9px;resize:vertical;color:#14161a;background:#f7f7f8');
     ta.setAttribute('maxlength', '5000');
     ta.placeholder = 'e.g. Picking a division takes too many taps on site';
     box.appendChild(ta);
