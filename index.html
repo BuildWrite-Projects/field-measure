@@ -3281,7 +3281,13 @@ function distoDirect(raw){
      the first shot on it is always the whole run, corner to corner past
      the jog. Every shot after that is just the selected wall. */
   var spD=isInt()?runSpan(i):null;
-  if(spD&&!runOf(spD)){distoRun(i,spD,t);return;}
+  if(spD&&!runOf(spD)){
+    /* ...unless it's clearly far too short to be the run (well under the
+       drawn run): then it was most likely just this wall, so ask */
+    var scD=cur().inch?1:(floorScale()/16||1);
+    if(t/16<0.6*spD.drawn*scD){askRunOrWall(i,spD,raw);return;}
+    distoRun(i,spD,t);return;
+  }
   distoDirectWall(i,t);
 }
 /* a Disto reading saved as the selected wall's own length */
@@ -3577,16 +3583,19 @@ function nextBlankWall(from,dir){
   }
   return -1;
 }
-/* Yellow walls: on the line of a run that's been shot, with no length of
-   their own and not yet worked out. One more wall and they will be. */
+/* Yellow walls: the ones a shot run adds up (the walls on its line and the
+   jog's face, running the same way), with no length of their own and not
+   yet worked out. Walking round fills them in. */
 function runCovered(wo){
   var n=segCount(),out={};if(!isInt()||!S.closed)return out;
   wo=wo||workedOut();
+  var dirs=roomDirs();
   for(var i=0;i<n;i++){
     var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len)continue;
     var sp=runSpan(i);if(!sp||sp.from!==i||sp.to!==wr.to)continue;
     for(var m=i;;m=(m+1)%n){
-      if(sameLine(i,m)&&!wallLen(m)&&!wo[m])out[m]=1;
+      var along=Math.abs(dirs[m].x*dirs[i].x+dirs[m].y*dirs[i].y)>0.99;
+      if(along&&!wallLen(m)&&!wo[m])out[m]=1;
       if(m===sp.to)break;
     }
   }
