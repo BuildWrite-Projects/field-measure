@@ -593,8 +593,14 @@ function intoState(){
   S.heights=j.heights||(j.heights={});S.snap=(j.snap===undefined?90:j.snap);
   S.locked=!!j.locked;
   V=j.view||{ox:0,oy:0,s:1};
-  hist=[];future=[];lastWall=-1;measHist=[];alignGroups=[];
+  /* each outline/room keeps its own undo history while the app is open, so
+     going back to a room you drew earlier still lets you step it back */
+  if(histShape)HISTS.set(histShape,{h:hist,f:future});
+  var hs=HISTS.get(sh);
+  hist=hs?hs.h:[];future=hs?hs.f:[];histShape=sh;
+  lastWall=-1;measHist=[];alignGroups=[];
 }
+var HISTS=new WeakMap(),histShape=null;
 /* Re-point the live state at the current outline's arrays WITHOUT throwing
    away the undo history. The housekeeping pass in render() welds corners
    that have landed on top of each other, and it used to call intoState for
@@ -960,6 +966,17 @@ function paint(){
     });
     ctx.restore();
   }
+  /* drawing a room: show where corners will snap, a wall's thickness out
+     from the rooms already there */
+  if(isInt()&&S.mode==='draw'&&!S.closed){
+    ctx.save();ctx.globalAlpha=.45;ctx.strokeStyle=C.acc;ctx.lineWidth=1.5;ctx.setLineDash([4,4]);
+    roomRings().forEach(function(r){
+      ctx.beginPath();
+      r.off.forEach(function(q,k){var s=W2S(q);if(k)ctx.lineTo(s.x,s.y);else ctx.moveTo(s.x,s.y);});
+      ctx.closePath();ctx.stroke();
+    });
+    ctx.restore();
+  }
   /* Markers are drawn at screen size, so zoomed out they swamp a busy
      outline. Shrink them with the zoom, down to a floor that stays visible. */
   var hs=Math.max(0.3,Math.min(1,V.s*1.15)), tiny=hs<0.55;
@@ -1177,48 +1194,93 @@ function snapPoint(p){
    onto that line; later corners only slide toward it along a wall that runs
    square to it, so the room stays square. */
 function wallThick16(){var f=cur();return dim16((f&&f.wallT)||'4 1/2"')||72;}
-function roomSnap(q,screenP){
-  var j=cur();if(!j||!j.shapes)return null;
-  var best=null,bd=24;
+/* Around every other room on the floor sits an invisible outline one wall's
+   thickness outside it: exactly where the next room's inside faces belong.
+   Its corners and edges are what new corners snap to, and nothing is allowed
+   inside it. */
+function roomRings(){
+  var j=cur(),out=[];if(!j||!j.shapes)return out;
   j.shapes.forEach(function(sh,si){
     if(si===j.active||!sh.closed||!sh.pts||sh.pts.length<3)return;
-    var n=sh.pts.length;
+    var P=sh.pts,n=P.length;
     /* drawing units per sixteenth, from this room's own measured walls */
-    var sc=withShape(sh,scaleFactor),tW=sc?wallThick16()/sc:8;
+    var sc=withShape(sh,scaleFactor),t=sc?wallThick16()/sc:8;
+    var nrm=[];
     for(var i=0;i<n;i++){
-      var A=sh.pts[i],B=sh.pts[(i+1)%n],a=W2S(A),b=W2S(B);
-      var dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy;if(L2<1)continue;
-      var t=((screenP.x-a.x)*dx+(screenP.y-a.y)*dy)/L2;
-      if(t<-0.15||t>1.15)continue;
-      var px=a.x+t*dx,py=a.y+t*dy,d=Math.hypot(screenP.x-px,screenP.y-py);
-      if(d>=bd)continue;
-      /* outward normal: the side of the wall that is NOT inside that room */
-      var wx=B.x-A.x,wy=B.y-A.y,wl=Math.hypot(wx,wy)||1,nx=-wy/wl,ny=wx/wl;
-      var mid={x:(A.x+B.x)/2,y:(A.y+B.y)/2};
-      if(pointInPoly({x:mid.x+nx*2,y:mid.y+ny*2},sh.pts)){nx=-nx;ny=-ny;}
-      /* only the face you tapped beside: at a corner the wall you're inside
-         the line of isn't the one you meant */
-      if((screenP.x-a.x)*nx+(screenP.y-a.y)*ny<-3)continue;
-      /* after the first corner, only a wall this new wall runs square into */
-      if(S.pts.length){
-        var Lp=S.pts[S.pts.length-1],sx0=q.x-Lp.x,sy0=q.y-Lp.y,sl0=Math.hypot(sx0,sy0);
-        if(!sl0||Math.abs((sx0*wx+sy0*wy)/(sl0*wl))>0.2)continue;
+      var A=P[i],B=P[(i+1)%n],wx=B.x-A.x,wy=B.y-A.y,wl=Math.hypot(wx,wy)||1;
+      var nx=-wy/wl,ny=wx/wl,mid={x:(A.x+B.x)/2,y:(A.y+B.y)/2};
+      /* outward: the side that is not inside the room */
+      if(pointInPoly({x:mid.x+nx,y:mid.y+ny},P)){nx=-nx;ny=-ny;}
+      nrm.push({x:nx,y:ny});
+    }
+    var off=[];
+    for(var k=0;k<n;k++){
+      var n1=nrm[(k-1+n)%n],n2=nrm[k],dot=n1.x*n2.x+n1.y*n2.y;
+      /* mitre: the point a wall's thickness off both walls that meet here */
+      if(1+dot<0.1)off.push({x:P[k].x+n2.x*t,y:P[k].y+n2.y*t});
+      else off.push({x:P[k].x+(n1.x+n2.x)*t/(1+dot),y:P[k].y+(n1.y+n2.y)*t/(1+dot)});
+    }
+    out.push({si:si,name:sh.name,pts:P,off:off,nrm:nrm,t:t});
+  });
+  return out;
+}
+/* Snap q (where the corner would go, drawing units) using the screen spot
+   that was tapped: a corner of a ring within vR pixels wins, then an edge
+   within eR pixels (q slides straight onto it). */
+function roomSnap(q,screenP,vR,eR){
+  vR=vR||30;eR=eR||24;
+  var rings=roomRings(),bv=null,bvd=vR,be=null,bed=eR;
+  rings.forEach(function(r){
+    var n=r.off.length;
+    for(var i=0;i<n;i++){
+      /* Near a corner of the room, which side you tapped decides the spot:
+         beside one wall (sharing the other wall's line, like two rooms on
+         the same outside wall), beside the other, or out past both (the
+         diagonal, for a room that wraps round the corner). */
+      var C=W2S(r.pts[i]),d=Math.hypot(screenP.x-C.x,screenP.y-C.y);
+      if(d<bvd){
+        var n1=r.nrm[(i-1+n)%n],n2=r.nrm[i];
+        var a1=(screenP.x-C.x)*n1.x+(screenP.y-C.y)*n1.y,b1=(screenP.x-C.x)*n2.x+(screenP.y-C.y)*n2.y;
+        var u1=a1>6,u2=b1>6,P0=r.pts[i],cp;
+        if(u1&&!u2)cp={pt:{x:P0.x+n1.x*r.t,y:P0.y+n1.y*r.t},keys:[r.si+':'+((i-1+n)%n)]};
+        else if(u2&&!u1)cp={pt:{x:P0.x+n2.x*r.t,y:P0.y+n2.y*r.t},keys:[r.si+':'+i]};
+        else cp={pt:r.off[i],keys:[r.si+':'+((i-1+n)%n),r.si+':'+i]};
+        bvd=d;bv={pt:cp.pt,room:r.name,keys:cp.keys};
       }
-      /* tapped near either end: that end, so the room starts at a corner */
-      var endAt=null;
-      if(Math.hypot(screenP.x-a.x,screenP.y-a.y)<34)endAt=A;
-      else if(Math.hypot(screenP.x-b.x,screenP.y-b.y)<34)endAt=B;
-      bd=d;best={A:A,ux:wx/wl,uy:wy/wl,nx:nx,ny:ny,t:tW,room:sh.name,endAt:endAt,key:si+':'+i};
+      var v=W2S(r.off[i]);
+      var a=v,b=W2S(r.off[(i+1)%n]),dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy;if(L2<1)continue;
+      var tt=((screenP.x-a.x)*dx+(screenP.y-a.y)*dy)/L2;
+      if(tt<-0.1||tt>1.1)continue;
+      var de=Math.hypot(screenP.x-(a.x+tt*dx),screenP.y-(a.y+tt*dy));
+      if(de<bed){bed=de;be={O:r.off[i],nrm:r.nrm[i],room:r.name,keys:[r.si+':'+i]};}
     }
   });
-  if(!best)return null;
-  /* signed distance from q to the offset line, measured along the normal */
-  var off=(q.x-best.A.x)*best.nx+(q.y-best.A.y)*best.ny-best.t;
-  if(!S.pts.length&&best.endAt){
-    /* first corner by that wall's end: right at the end, a wall's thickness out */
-    return{pt:{x:Math.round(best.endAt.x+best.nx*best.t),y:Math.round(best.endAt.y+best.ny*best.t)},room:best.room,key:best.key};
+  if(bv)return{pt:{x:Math.round(bv.pt.x),y:Math.round(bv.pt.y)},room:bv.room,keys:bv.keys};
+  if(be){
+    var o=(q.x-be.O.x)*be.nrm.x+(q.y-be.O.y)*be.nrm.y;
+    return{pt:{x:Math.round(q.x-be.nrm.x*o),y:Math.round(q.y-be.nrm.y*o)},room:be.room,keys:be.keys};
   }
-  return{pt:{x:Math.round(q.x-best.nx*off),y:Math.round(q.y-best.ny*off)},room:best.room,key:best.key};
+  return null;
+}
+/* A corner that would land inside a room already drawn (or inside the wall
+   around it) is pushed out onto the nearest edge of that room's ring. */
+function keepOutside(q){
+  var rings=roomRings();
+  for(var r=0;r<rings.length;r++){
+    var R=rings[r];
+    if(!pointInPoly(q,R.off))continue;
+    var best=null,bd=1e9,n=R.off.length;
+    for(var i=0;i<n;i++){
+      var A=R.off[i],B=R.off[(i+1)%n],dx=B.x-A.x,dy=B.y-A.y,L2=dx*dx+dy*dy||1;
+      var tt=Math.max(0,Math.min(1,((q.x-A.x)*dx+(q.y-A.y)*dy)/L2));
+      var d=Math.hypot(q.x-(A.x+tt*dx),q.y-(A.y+tt*dy));
+      if(d<bd){bd=d;best=i;}
+    }
+    if(bd<0.75)return null;               /* already on the line */
+    var O=R.off[best],nr=R.nrm[best],o=(q.x-O.x)*nr.x+(q.y-O.y)*nr.y;
+    return{pt:{x:Math.round(q.x-nr.x*o),y:Math.round(q.y-nr.y*o)},room:R.name,keys:[R.si+':'+best]};
+  }
+  return null;
 }
 function hitWall(p){
   var n=segCount(),best=-1,bt=0,bd=28;
@@ -1568,17 +1630,19 @@ function tap(p){
     snapshot();
     var np=snapPoint(S2W(p));
     if(isInt()){
-      var rs=roomSnap(np,p),shc=curShape();
-      if(rs){
-        np=rs.pt;
+      var shc=curShape(),how=roomSnap(np,p);
+      if(how)np=how.pt;
+      var ko=keepOutside(np);
+      if(ko){np=ko.pt;if(!how)how=ko;}
+      if(how){
         if(S.pts.length===0){
-          shc.startWall=rs.key;
-          say('Started against '+rs.room+' — one wall’s thickness out from it. Now tap each corner as you walk the room.');
-        }else if(S.pts.length>=3&&shc.startWall===rs.key){
+          shc.startKeys=how.keys;
+          say('Started against '+how.room+' — one wall’s thickness out from it. Now tap each corner as you walk the room.');
+        }else if(S.pts.length>=3&&shc.startKeys&&how.keys.some(function(k){return shc.startKeys.indexOf(k)>=0;})){
           /* back on the wall you started against: the last wall runs along it
              to the first corner, so the room is finished */
           S.pts.push(np);closeShape();
-          say('Closed along '+rs.room+'’s wall.');
+          say('Closed along '+how.room+'’s wall.');
           render();return;
         }
       }
@@ -1936,7 +2000,14 @@ cv.addEventListener('pointermove',function(e){
       }
       var rr=cv.getBoundingClientRect();
       dragAt={x:e.clientX-rr.left,y:e.clientY-rr.top};   /* where the finger is */
-      moveCorner(dragBase,dragIdx,S2W(dragAt));
+      var tgW=S2W(dragAt);
+      if(isInt()){
+        /* magnetic: pulls onto a neighbouring room's corner or wall line as
+           you pass it, lets go once the finger is well past */
+        var ms=roomSnap(tgW,dragAt,22,14);if(ms)tgW=ms.pt;
+        var ko2=keepOutside(tgW);if(ko2)tgW=ko2.pt;
+      }
+      moveCorner(dragBase,dragIdx,tgW);
       weldTo=mergeTarget(dragIdx);
       paint();
     }else{V.ox+=e.clientX-prev.x;V.oy+=e.clientY-prev.y;paint();}
@@ -2475,12 +2546,26 @@ function distoCommit(){
   try{DISTO.on=localStorage.getItem('fieldmeasure.disto')==='1';}catch(e){DISTO.on=false;}
   function paintBtn(){btn.className='sbtn'+(DISTO.on?' on':'');btn.setAttribute('aria-pressed',DISTO.on?'true':'false');}
   paintBtn();
+  /* Only when a reading has somewhere to go: a length box open, or a wall
+     selected in Measure. Focusing the box makes the iPhone show and hide its
+     keyboard bar, which shook the drawing, so it is never held while drawing
+     and never re-focused when it already has focus. */
+  window.distoWanted=function(){
+    return DISTO.on&&((SH&&!sheet.hidden)||(S.mode==='measure'&&lastWall>=0&&lastWall<segCount()));
+  };
   window.distoFocus=function(){
-    if(!DISTO.on)return;
+    if(!distoWanted())return;
     var a=document.activeElement;
-    if(a&&a!==ci&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.isContentEditable))return;
+    if(a===ci)return;
+    if(a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.isContentEditable))return;
     try{ci.focus({preventScroll:true});}catch(e){try{ci.focus();}catch(e2){}}
   };
+  window.distoRelease=function(){
+    if(document.activeElement===ci&&!distoWanted()){try{ci.blur();}catch(e){}}
+  };
+  /* the page itself never scrolls; if the phone nudges it to show the box,
+     put it straight back */
+  window.addEventListener('scroll',function(){if(window.scrollX||window.scrollY)window.scrollTo(0,0);});
   btn.addEventListener('click',function(){
     DISTO.on=!DISTO.on;
     try{localStorage.setItem('fieldmeasure.disto',DISTO.on?'1':'0');}catch(e){}
@@ -2490,7 +2575,7 @@ function distoCommit(){
     render();
   });
   /* every tap is a chance to put focus back (iPhone only allows it during a tap) */
-  document.addEventListener('click',function(){distoFocus();});
+  document.addEventListener('click',function(){if(distoWanted())distoFocus();else distoRelease();});
   /* what the laser typed lands in the box */
   ci.addEventListener('input',function(){
     if(!(SH&&!sheet.hidden)&&!distoDirectOK()){
@@ -4055,7 +4140,8 @@ function render(){
   document.getElementById('caret').textContent=panelOpen?'\u25be Hide list':'\u25b4 Show list';
   document.getElementById('close').hidden=!(S.mode==='draw'&&S.pts.length>2&&!S.closed);
   document.getElementById('redo').hidden=!future.length;
-  document.getElementById('undo').className='sbtn'+((S.locked||!hist.length)?' off':'');
+  var canDrop=!hist.length&&!S.pts.length&&cur()&&cur().shapes.length>1;
+  document.getElementById('undo').className='sbtn'+((S.locked||(!hist.length&&!canDrop))?' off':'');
   document.getElementById('redo').className='sbtn'+(S.locked?' off':'');
   document.getElementById('tools').hidden=(S.mode!=='draw'||S.locked);
   var lk=document.getElementById('lock');
@@ -4217,7 +4303,19 @@ document.getElementById('undo').addEventListener('click',function(){
     say('The drawing is locked \u2014 Undo can\u2019t roll it back. Tap the padlock first.');
     render();return;
   }
-  if(!hist.length)return;
+  if(!hist.length){
+    /* stepped all the way back to an empty new room: one more Undo takes the
+       room away, so you can start fresh */
+    var jr=cur();
+    if(!S.pts.length&&jr.shapes.length>1){
+      var gone=curShape().name,ix=jr.active;
+      jr.shapes.splice(ix,1);reindexTies(jr,ix);
+      jr.active=Math.max(0,Math.min(ix,jr.shapes.length)-1);
+      histShape=null;intoState();setMode(S.closed?'measure':'draw');
+      say('Took away the empty '+gone+'.');render();
+    }
+    return;
+  }
   var now=filledNow(),was=filledIn(hist[hist.length-1]);
   if(was>=0&&was<now){
     var lost=now-was;
