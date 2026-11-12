@@ -1264,9 +1264,38 @@ function floorScale(){
   rs.sort(function(a,b){return a-b;});
   return rs[rs.length>>1];
 }
+/* The wall's thickness as it is DRAWN on this floor: the gap between two
+   rooms already side by side, face to face. The sketch is not to scale (a
+   wall drawn twice as long as another may measure only half again as long),
+   so a thickness worked out from measurements came out wider than the gap
+   actually drawn, and the dotted line no longer met the rooms. */
+function drawnGap(){
+  var j=cur();if(!j||!j.shapes)return 0;
+  var rooms=j.shapes.filter(function(sh,si){return si!==j.active&&sh.closed&&sh.pts&&sh.pts.length>=3;});
+  var gaps=[];
+  for(var a=0;a<rooms.length;a++)for(var b=a+1;b<rooms.length;b++){
+    var P=rooms[a].pts,Q=rooms[b].pts;
+    for(var i=0;i<P.length;i++){
+      var A1=P[i],A2=P[(i+1)%P.length],ux=A2.x-A1.x,uy=A2.y-A1.y,ul=Math.hypot(ux,uy);if(ul<1)continue;ux/=ul;uy/=ul;
+      for(var k=0;k<Q.length;k++){
+        var B1=Q[k],B2=Q[(k+1)%Q.length],vx=B2.x-B1.x,vy=B2.y-B1.y,vl=Math.hypot(vx,vy);if(vl<1)continue;vx/=vl;vy/=vl;
+        if(Math.abs(ux*vy-uy*vx)>0.02)continue;                       /* not parallel */
+        var d=Math.abs((B1.x-A1.x)*(-uy)+(B1.y-A1.y)*ux);             /* distance between the lines */
+        if(d<0.5||d>20)continue;
+        /* they have to face each other along some stretch */
+        var s1=(B1.x-A1.x)*ux+(B1.y-A1.y)*uy,s2=(B2.x-A1.x)*ux+(B2.y-A1.y)*uy;
+        var lo=Math.max(0,Math.min(s1,s2)),hi=Math.min(ul,Math.max(s1,s2));
+        if(hi-lo>2)gaps.push(d);
+      }
+    }
+  }
+  if(!gaps.length)return 0;
+  gaps.sort(function(x,y){return x-y;});
+  return gaps[gaps.length>>1];
+}
 function roomRings(){
   var j=cur(),out=[];if(!j||!j.shapes)return out;
-  var fsc=floorScale(),t=fsc?wallThick16()/fsc:6;
+  var g=drawnGap(),fsc=g?0:floorScale(),t=g||(fsc?wallThick16()/fsc:6);
   j.shapes.forEach(function(sh,si){
     if(si===j.active||!sh.closed||!sh.pts||sh.pts.length<3)return;
     var P=sh.pts,n=P.length;
@@ -1308,7 +1337,7 @@ function ringWhere(pt,exceptSi,rings){
    that was tapped: a corner of a ring within vR pixels wins, then an edge
    within eR pixels (q slides straight onto it). */
 function roomSnap(q,screenP,vR,eR){
-  vR=vR||30;eR=eR||24;
+  vR=vR||36;eR=eR||24;
   var rings=roomRings(),bv=null,bvd=vR,be=null,bed=eR;
   rings.forEach(function(r){
     var n=r.off.length;
@@ -1424,11 +1453,29 @@ function squareTurn(L,q0,P){
 }
 /* A corner that would land inside a room already drawn (or inside the wall
    around it) is pushed out onto the nearest edge of that room's ring. */
+function segX(A,B,C,D){
+  var r={x:B.x-A.x,y:B.y-A.y},s={x:D.x-C.x,y:D.y-C.y},den=r.x*s.y-r.y*s.x;
+  if(Math.abs(den)<1e-9)return null;
+  var t=((C.x-A.x)*s.y-(C.y-A.y)*s.x)/den,u=((C.x-A.x)*r.y-(C.y-A.y)*r.x)/den;
+  if(t<-1e-6||t>1+1e-6||u<-1e-6||u>1+1e-6)return null;
+  return{x:A.x+t*r.x,y:A.y+t*r.y};
+}
 function keepOutside(q){
   var rings=roomRings();
   if(ringWhere(q,-1,rings)!=='in')return null;      /* already outside, or on the line */
-  /* out to the nearest stretch of the shared outside line */
+  /* out to the nearest stretch of the shared outside line - or to a point
+     where two rooms' lines cross, which is often the only spot on the
+     outside right where two rooms meet */
   var best=null,bd=1e9;
+  for(var a=0;a<rings.length;a++)for(var b=a+1;b<rings.length;b++){
+    var Ra=rings[a],Rb=rings[b];
+    for(var i=0;i<Ra.off.length;i++)for(var k=0;k<Rb.off.length;k++){
+      var X=segX(Ra.off[i],Ra.off[(i+1)%Ra.off.length],Rb.off[k],Rb.off[(k+1)%Rb.off.length]);
+      if(!X)continue;
+      var dX=Math.hypot(q.x-X.x,q.y-X.y);
+      if(dX<bd&&ringWhere(X,-1,rings)!=='in'){bd=dX;best={pt:{x:Math.round(X.x),y:Math.round(X.y)},room:Ra.name,keys:[Ra.si+':'+i,Rb.si+':'+k]};}
+    }
+  }
   rings.forEach(function(R){
     var n=R.off.length;
     for(var i=0;i<n;i++){
@@ -1439,6 +1486,9 @@ function keepOutside(q){
       bd=d;best={pt:{x:Math.round(p.x),y:Math.round(p.y)},room:R.name,keys:[R.si+':'+i]};
     }
   });
+  /* nowhere outside close by (inside the walls where rooms meet): don't
+     throw the corner across the floor, refuse the spot */
+  if(!best||bd>40/V.s)return{blocked:true};
   return best;
 }
 function hitWall(p){
@@ -1548,6 +1598,10 @@ function moveCorner(base,i,w){
   }
   var uPrev=pi>=0?qd(dirOf(base[pi],cur)):null;
   var uNext=ni>=0?qd(dirOf(cur,base[ni])):null;
+  /* a wall squashed to nothing has no direction left to keep; take the one
+     it would have from where the corner is going, squared up */
+  if(pi>=0&&!uPrev&&isInt())uPrev=qd(dirOf(base[pi],C));
+  if(ni>=0&&!uNext&&isInt())uNext=qd(dirOf(C,base[ni]));
   var ppi=pi<0?-1:(pi>0?pi-1:(S.closed?n-1:-1));
   var nni=ni<0?-1:(ni<n-1?ni+1:(S.closed?0:-1));
   var nb=null,nd=null;
@@ -1802,6 +1856,12 @@ function tap(p){
       var shc=curShape(),q0=np,how=roomSnap(np,p);
       if(how)np=how.pt;
       var ko=keepOutside(np);
+      if(ko&&ko.blocked){
+        if(hist.length)hist.pop();          /* nothing was added: drop the snapshot */
+        FMLog.add('refused',{tap:[Math.round(p.x),Math.round(p.y)],aim:[q0.x,q0.y]});
+        say('That spot is inside the walls between rooms. Tap just outside a room’s dotted line.');
+        render();return;
+      }
       if(ko){np=ko.pt;if(!how)how=ko;}
       /* a snap can pull the corner sideways off the line you were walking.
          Never draw that as a slanted wall: carry on straight and turn, square
@@ -2195,7 +2255,9 @@ cv.addEventListener('pointermove',function(e){
         /* magnetic: pulls onto a neighbouring room's corner or wall line as
            you pass it, lets go once the finger is well past */
         var ms=roomSnap(tgW,dragAt,22,14);if(ms)tgW=ms.pt;
-        var ko2=keepOutside(tgW);if(ko2)tgW=ko2.pt;
+        var ko2=keepOutside(tgW);
+        if(ko2&&ko2.blocked){paint();return;}   /* inside the walls: hold where it was */
+        if(ko2)tgW=ko2.pt;
       }
       moveCorner(dragBase,dragIdx,tgW);
       weldTo=mergeTarget(dragIdx);
