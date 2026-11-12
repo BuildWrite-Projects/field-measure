@@ -62,8 +62,19 @@
     go.onclick = function () {
       var text = (ta.value || '').trim();
       if (!text) { msg.textContent = 'Type a note first.'; ta.focus(); return; }
+      /* An app can hand over a short log of what was just done (opts.extra),
+         so a note like "it went the wrong way" comes with the taps behind it.
+         Your words always go first; the log is cut from the oldest end. */
+      var extra = '';
+      try { if (opts.extra) extra = String(opts.extra() || ''); } catch (e) {}
+      var body = text.slice(0, 2500);
+      if (extra) {
+        var head = '\n\n--- recent actions (added automatically) ---\n';
+        var room = 5000 - body.length - head.length;
+        if (room > 200) body += head + (extra.length > room ? extra.slice(extra.length - room) : extra);
+      }
       var note = {
-        app: opts.app, message: text.slice(0, 5000),
+        app: opts.app, message: body,
         page: (location.pathname + location.hash).slice(0, 200),
         app_version: String(opts.version || ''),
         device: (navigator.userAgent || '').slice(0, 300)

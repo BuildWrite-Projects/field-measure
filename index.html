@@ -15,7 +15,8 @@
   document.addEventListener('DOMContentLoaded', function () {
     var hdr = document.getElementById('hdr');
     if (hdr && window.BWFeedback) BWFeedback.mount({ app: 'field-measure', into: hdr, before: document.getElementById('sync'),
-      client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-06' });
+      client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-12',
+      extra: function () { return window.FMLog ? FMLog.text() : ''; } });
   });
 </script>
 </head><body>
@@ -635,6 +636,30 @@ function withShape(sh,fn){
 }
 readDB();
 migrateAll(DB);   /* rename old height keys before anything reads them */
+/* The last few dozen things done, sent along with a Feedback note so a
+   report like "it went through the room" comes with the taps behind it.
+   Kept in memory only; nothing is stored or sent unless Feedback is used. */
+window.FMLog=(function(){
+  var buf=[];
+  function r(p){return p?[Math.round(p.x),Math.round(p.y)]:null;}
+  return{
+    add:function(t,o){
+      try{buf.push(new Date().toTimeString().slice(0,8)+' '+t+(o?' '+JSON.stringify(o):''));}catch(e){}
+      if(buf.length>60)buf.shift();
+    },
+    text:function(){
+      var head='';
+      try{
+        var j=cur();
+        head='state '+JSON.stringify({side:isInt()?'interior':'exterior',floor:isInt()?j.floor:null,
+          room:curShape().name,mode:S.mode,snap:S.snap,zoom:Math.round(V.s*100)/100,closed:S.closed,
+          wallT:isInt()?j.wallT:null,pts:S.pts.map(r),
+          others:(j.shapes||[]).filter(function(sh,i){return i!==j.active;}).map(function(sh){return{name:sh.name,pts:(sh.pts||[]).map(r)};})})+'\n';
+      }catch(e){}
+      return head+buf.join('\n');
+    }
+  };
+})();
 
 /* Where measurements live is storage.js's business, not this file's.
    localStorage keeps the app instant and usable with no signal; the database
@@ -1266,6 +1291,44 @@ function roomSnap(q,screenP,vR,eR){
   }
   return null;
 }
+/* ---------- going round a room, not through it ----------
+   A new wall that would cut through a room already drawn is walked round the
+   outside of it instead, along its dotted line, the short way round. */
+function ringDist(r,P){
+  var best=null,bd=1e9,n=r.off.length;
+  for(var i=0;i<n;i++){
+    var A=r.off[i],B=r.off[(i+1)%n],dx=B.x-A.x,dy=B.y-A.y,L2=dx*dx+dy*dy||1;
+    var t=Math.max(0,Math.min(1,((P.x-A.x)*dx+(P.y-A.y)*dy)/L2));
+    var d=Math.hypot(P.x-(A.x+t*dx),P.y-(A.y+t*dy));
+    if(d<bd){bd=d;best={e:i,t:t,d:d};}
+  }
+  return best;
+}
+function crossesRing(A,B){
+  var rings=roomRings();
+  for(var k=0;k<rings.length;k++){
+    var r=rings[k];
+    for(var s=0.1;s<0.95;s+=0.1){
+      var q={x:A.x+(B.x-A.x)*s,y:A.y+(B.y-A.y)*s};
+      if(pointInPoly(q,r.off)&&ringDist(r,q).d>0.75)return r;
+    }
+  }
+  return null;
+}
+function routeAround(L,P,r){
+  var a=ringDist(r,L),b=ringDist(r,P),n=r.off.length;
+  if(a.d>1.5||b.d>1.5)return null;          /* only when both ends sit on its line */
+  function walk(step){
+    var out=[],i=step>0?(a.e+1)%n:a.e,stop=step>0?(b.e+1)%n:b.e,guard=0;
+    if(a.e===b.e)return out;
+    while(i!==stop&&guard++<n){out.push(r.off[i]);i=(i+step+n)%n;}
+    return out;
+  }
+  function len(path){var p=[L].concat(path,[P]),s=0;for(var i=1;i<p.length;i++)s+=Math.hypot(p[i].x-p[i-1].x,p[i].y-p[i-1].y);return s;}
+  var f=walk(1),bk=walk(-1);
+  var pick=len(f)<=len(bk)?f:bk;
+  return pick.map(function(q){return{x:Math.round(q.x),y:Math.round(q.y)};});
+}
 /* L is the last corner, q0 where the corner was going before any snap (so on
    the line being walked), P where it ended up. If L->P isn't square (or a
    45 on that setting), return the corner to add between them: straight on
@@ -1678,10 +1741,24 @@ function tap(p){
       /* a snap can pull the corner sideways off the line you were walking.
          Never draw that as a slanted wall: carry on straight and turn, square
          (or at 45 on that setting), the way the room actually goes */
-      if(S.pts.length&&S.snap){
-        var K=squareTurn(S.pts[S.pts.length-1],q0,np);
-        if(K){S.pts.push(K);}
+      var added=[];
+      if(S.pts.length){
+        var Lc=S.pts[S.pts.length-1],thru=crossesRing(Lc,np);
+        /* straight through a room: go round it on its dotted line instead */
+        if(thru){var rt=routeAround(Lc,np,thru);if(rt)added=rt;}
+        if(!added.length&&S.snap){
+          var K=squareTurn(Lc,q0,np);
+          if(K&&(crossesRing(Lc,K)||crossesRing(K,np))&&S.snap===90){
+            /* the turn that goes round the outside, not the one through it */
+            var K2=(Math.abs(K.y-Lc.y)<0.75)?{x:Lc.x,y:np.y}:{x:np.x,y:Lc.y};
+            if(!crossesRing(Lc,K2)&&!crossesRing(K2,np))K=K2;
+          }
+          if(K)added=[K];
+        }
+        added.forEach(function(q){S.pts.push(q);});
       }
+      if(window.FMLog)FMLog.add('corner',{tap:[Math.round(p.x),Math.round(p.y)],aim:[q0.x,q0.y],at:[np.x,np.y],
+        snap:how?(how.room+' '+how.keys.join('/')):'',pushedOut:!!ko,added:added.map(function(q){return[q.x,q.y];})});
       if(how){
         if(S.pts.length===0){
           shc.startKeys=how.keys;
@@ -2089,6 +2166,9 @@ function endPtr(e){
       var other=dragIdx===0?nP-1:0,a2=dragAt||W2S(S.pts[dragIdx]),b2=W2S(dragBase[other]);
       if(Math.hypot(a2.x-b2.x,a2.y-b2.y)<34)closeIt=true;
     }
+    FMLog.add('drag',{corner:dragIdx,from:dragBase&&dragBase[dragIdx]?[Math.round(dragBase[dragIdx].x),Math.round(dragBase[dragIdx].y)]:null,
+      finger:dragAt?[Math.round(S2W(dragAt).x),Math.round(S2W(dragAt).y)]:null,
+      to:S.pts[dragIdx]?[Math.round(S.pts[dragIdx].x),Math.round(S.pts[dragIdx].y)]:null,closes:closeIt});
     if(closeIt){
       dragBase.forEach(function(q,i){S.pts[i].x=q.x;S.pts[i].y=q.y;});
       closeShape();
@@ -2131,6 +2211,7 @@ cv.addEventListener('wheel',function(e){
 
 function closeShape(){
   if(S.locked||S.pts.length<3)return;
+  FMLog.add('close',{corners:S.pts.length});
   snapshot();
   if(S.snap===90){
     var L=S.pts[S.pts.length-1],P=S.pts[S.pts.length-2],F=S.pts[0];
@@ -4256,6 +4337,7 @@ function hintText(){
 }
 var panelOpen=true;
 function setMode(m){
+  if(S.mode!==m)FMLog.add('mode',{to:m});
   resetTouches();
   S.mode=m;
   if(m==='measure')S.tab='walls';
@@ -4341,6 +4423,7 @@ document.getElementById('snap').addEventListener('click',function(){
   render();
 });
 function doUndo(){
+  FMLog.add('undo',{left:hist.length-1});
   undo();
   S.openings=S.openings.filter(function(o){return o.wall<segCount();});
   if(alignOn){alignOn=false;alignSel=[];}
@@ -4674,7 +4757,7 @@ function openName(job){
 }
 document.getElementById('jobbtn').addEventListener('click',openJobs);
 
-function switchShape(i){save();cur().active=i;intoState();setMode(S.closed?'measure':'draw');render();}
+function switchShape(i){FMLog.add('room',{to:cur().shapes[i]&&cur().shapes[i].name});save();cur().active=i;intoState();setMode(S.closed?'measure':'draw');render();}
 function addShape(){
   var j=cur(),used=j.shapes.map(function(x){return x.name.toLowerCase();});
   var list=isInt()?['Kitchen','Living room','Dining room','Hall','Bath','Bedroom','Closet','Laundry','Office','Pantry']
