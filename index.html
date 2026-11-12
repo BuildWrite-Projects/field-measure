@@ -1245,6 +1245,7 @@ function snapPoint(p){
    onto that line; later corners only slide toward it along a wall that runs
    square to it, so the room stays square. */
 function wallThick16(){var f=cur();return dim16((f&&f.wallT)||'4 1/2"')||72;}
+function wallThickUnits(){var r=roomRings();return r.length?r[0].t:4.5;}
 /* Around every other room on the floor sits an invisible outline one wall's
    thickness outside it: exactly where the next room's inside faces belong.
    Its corners and edges are what new corners snap to, and nothing is allowed
@@ -1478,6 +1479,46 @@ function pickCorner(cands,from,to,mode){
     var sc=0;
     var lineVal=horiz?c.pt.y:c.pt.x;
     if(others.some(function(q){return Math.abs((horiz?q.y:q.x)-lineVal)<0.3;}))sc+=10;  /* carries a wall's line */
+    if(!c.diag)sc+=5;
+    if(sc>bs){bs=sc;best=c;}
+  });
+  return best;
+}
+/* The three spots by one corner of a room's dotted line, found from that
+   corner of the line (where a route round the room turns). */
+function ringCornerCands(pt){
+  var rings=roomRings();
+  for(var k=0;k<rings.length;k++){
+    var r=rings[k],n=r.off.length;
+    for(var i=0;i<n;i++){
+      if(Math.hypot(r.off[i].x-pt.x,r.off[i].y-pt.y)>0.75)continue;
+      var n1=r.nrm[(i-1+n)%n],n2=r.nrm[i],P0=r.pts[i];
+      return [{pt:{x:rnd(P0.x+n1.x*r.t),y:rnd(P0.y+n1.y*r.t)},keys:[r.si+':'+((i-1+n)%n)]},
+              {pt:{x:rnd(P0.x+n2.x*r.t),y:rnd(P0.y+n2.y*r.t)},keys:[r.si+':'+i]},
+              {pt:{x:rnd(r.off[i].x),y:rnd(r.off[i].y)},keys:[r.si+':'+((i-1+n)%n),r.si+':'+i],diag:true}]
+        .filter(function(c){return ringWhere(c.pt,r.si,rings)!=='in';});
+    }
+  }
+  return null;
+}
+/* A corner already placed by a room's corner, looked at again once the next
+   tap shows where the wall goes from it: it has to stay on the line coming
+   in from prev, the wall going out mustn't run into a room, and the spot
+   that carries a room's wall line on in the new direction wins - so a room
+   that turns away from its neighbour's corner continues that wall straight,
+   and one that wraps round it keeps the wall's thickness off it. */
+function pickVia(cands,prev,cornerNow,to){
+  var inH=Math.abs(cornerNow.x-prev.x)>=Math.abs(cornerNow.y-prev.y);
+  var others=[];var j=cur();
+  (j.shapes||[]).forEach(function(sh,si){if(si!==j.active&&sh.pts)others=others.concat(sh.pts);});
+  var best=null,bs=-1e9;
+  cands.forEach(function(c){
+    if(inH?Math.abs(c.pt.y-prev.y)>0.3:Math.abs(c.pt.x-prev.x)>0.3)return;
+    var outH=Math.abs(to.x-c.pt.x)>=Math.abs(to.y-c.pt.y);
+    var B=outH?{x:to.x,y:c.pt.y}:{x:c.pt.x,y:to.y};
+    if(crossesRing(prev,c.pt)||crossesRing(c.pt,B))return;
+    var sc=0,lineVal=outH?c.pt.y:c.pt.x;
+    if(others.some(function(q){return Math.abs((outH?q.y:q.x)-lineVal)<0.3;}))sc+=10;
     if(!c.diag)sc+=5;
     if(sc>bs){bs=sc;best=c;}
   });
@@ -1932,6 +1973,17 @@ function tap(p){
       }
       delete curShape().firstCands;
     }
+    /* the last corner, if it was put by a room's corner: now that this tap
+       shows where the wall goes next, choose its spot again */
+    var pend=isInt()&&curShape().pendCands;
+    if(pend&&pend.idx===S.pts.length-1&&S.pts.length>=2){
+      var pv=pickVia(pend.cands,S.pts[pend.idx-1],S.pts[pend.idx],S2W(p));
+      if(pv&&(pv.pt.x!==S.pts[pend.idx].x||pv.pt.y!==S.pts[pend.idx].y)){
+        FMLog.add('recorner',{corner:pend.idx,from:[S.pts[pend.idx].x,S.pts[pend.idx].y],to:[pv.pt.x,pv.pt.y]});
+        S.pts[pend.idx]={x:pv.pt.x,y:pv.pt.y};
+      }
+    }
+    if(isInt())delete curShape().pendCands;
     var np=snapPoint(S2W(p));
     if(isInt()){
       var shc=curShape(),q0=np,how=roomSnap(np,p);
@@ -1960,6 +2012,22 @@ function tap(p){
         var Lc=S.pts[S.pts.length-1],thru=crossesRing(Lc,np);
         /* straight through a room: go round it on its dotted line instead */
         if(thru){var rt=routeAround(Lc,np,thru);if(rt)added=rt;}
+        if(added.length){
+          /* the route's last turn is at a corner of the room it went round */
+          var lastV=added[added.length-1],prevV=added.length>1?added[added.length-2]:Lc;
+          var rc=ringCornerCands(lastV);
+          if(rc&&rc.length){
+            var near2=Math.hypot(np.x-lastV.x,np.y-lastV.y)<=wallThickUnits()*1.6;
+            var inl=pickCorner(rc,prevV,lastV,'arrive');
+            if(inl&&near2){
+              /* the tap was at that same corner: one corner there, the in-line one */
+              added.pop();np=inl.pt;how={room:(how&&how.room)||'',keys:inl.keys,cands:rc};
+            }else if(inl){
+              var okSq=Math.abs(inl.pt.x-np.x)<0.3||Math.abs(inl.pt.y-np.y)<0.3;
+              if(okSq)added[added.length-1]=inl.pt;
+            }
+          }
+        }
         if(!added.length&&S.snap){
           var K=squareTurn(Lc,q0,np);
           if(K&&(crossesRing(Lc,K)||crossesRing(K,np))&&S.snap===90){
@@ -1986,7 +2054,11 @@ function tap(p){
         }
       }
     }
-    if(isInt())pushCorner(np);else S.pts.push(np);
+    if(isInt()){
+      pushCorner(np);
+      /* put by a room's corner: keep its options for the next tap to settle */
+      if(how&&how.cands&&S.pts.length>=2)curShape().pendCands={idx:S.pts.length-1,cands:how.cands};
+    }else S.pts.push(np);
     render();
   }else if(S.mode==='measure'){
     /* a tighter radius than the drag handle: you have to mean this one,
