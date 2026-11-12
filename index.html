@@ -3814,7 +3814,7 @@ function hintText(){
     ? 'Tap every corner you want to work on \u2014 a whole run of wall, jogs and all. Tap open paper to let them go.'
     : 'Drag a picked corner to slide all '+alignSel.length+' as one piece. Tap open paper when done, or the button to flatten them onto one line.';
   if(S.mode==='measure'&&lastWall>=0&&lastWall<segCount())
-    return 'Wall '+(lastWall+1)+' selected. Tap it again to type the length, or shoot it with the Disto and press send. Tap open paper to let go.';
+    return 'Wall '+(lastWall+1)+' selected. Tap it again to type the length, or shoot it with the Disto. Tap open paper to let go.';
   if(S.mode==='measure')return 'Tap a wall for its length, or a corner for its grade \u2014 how far the dirt sits below the top of the foundation. Drag a corner to stretch it.';
   if(S.mode==='open')return 'Tap a wall where a window or door sits to add one. Tap an opening already there to edit or remove it.';
   if(S.snap===90)return 'Tap to place a corner. Drag one onto its neighbour to join them. Drag anywhere else to move the paper.';

@@ -7,7 +7,7 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v13';
+var VERSION = 'fm-v14';
 var CORE = [
   './',
   'index.html',
@@ -85,8 +85,23 @@ self.addEventListener('fetch', function (e) {
 
   e.respondWith(
     caches.open(VERSION).then(function (cache) {
+      /* App code skips the browser's own cache (the site lets it keep files
+         for 10 minutes), so a newly published version arrives on the next
+         open. no-cache still lets the server answer "unchanged" cheaply. If
+         that fetch fails or comes back redirected (Safari refuses a redirected
+         answer to a page load), fall back to the plain request. */
+      function fresh() {
+        if (!networkFirst) return fetch(req);
+        var f;
+        try { f = fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }); }
+        catch (e) { return fetch(req); }
+        return f.then(function (res) {
+          if (!res || res.redirected) return fetch(req);
+          return res;
+        }, function () { return fetch(req); });
+      }
       function fromNetwork() {
-        return fetch(req).then(function (res) {
+        return fresh().then(function (res) {
           if (res && (res.ok || res.type === 'opaque')) {
             cache.put(req, res.clone()).catch(function () {});
           }
