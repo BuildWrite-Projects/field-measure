@@ -74,6 +74,10 @@ header h1{font-family:var(--display);font-size:21px;line-height:1.05;letter-spac
   border-radius:6px;padding:4px 9px;max-width:52vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.9}
 #modal{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;z-index:30}
 #modal[hidden]{display:none!important}
+/* a box you type into (rename, new room, new floor, new job) sits at the top,
+   clear of the phone's keyboard */
+#modal.typing{align-items:flex-start}
+#modal.typing #modalbox{border-radius:0 0 14px 14px;padding:calc(14px + env(safe-area-inset-top,0px)) 14px 14px}
 #modalbox{width:100%;background:var(--surface);border-radius:14px 14px 0 0;
   padding:14px 14px calc(14px + env(safe-area-inset-bottom,0px));
   max-height:100%;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
@@ -1357,16 +1361,24 @@ function roomSnap(q,screenP,vR,eR){
       if(dC<vR*2.5){
         var n1=r.nrm[(i-1+n)%n],n2=r.nrm[i];
         var a1=(screenP.x-C.x)*n1.x+(screenP.y-C.y)*n1.y,b1=(screenP.x-C.x)*n2.x+(screenP.y-C.y)*n2.y;
-        var u1=a1>6,u2=b1>6,P0=r.pts[i],cp;
-        if(u1&&!u2)cp={pt:{x:P0.x+n1.x*r.t,y:P0.y+n1.y*r.t},keys:[r.si+':'+((i-1+n)%n)]};
-        else if(u2&&!u1)cp={pt:{x:P0.x+n2.x*r.t,y:P0.y+n2.y*r.t},keys:[r.si+':'+i]};
-        else cp={pt:r.off[i],keys:[r.si+':'+((i-1+n)%n),r.si+':'+i]};
+        var P0=r.pts[i];
+        var c1={pt:{x:P0.x+n1.x*r.t,y:P0.y+n1.y*r.t},keys:[r.si+':'+((i-1+n)%n)]},
+            c2={pt:{x:P0.x+n2.x*r.t,y:P0.y+n2.y*r.t},keys:[r.si+':'+i]},
+            cd={pt:r.off[i],keys:[r.si+':'+((i-1+n)%n),r.si+':'+i],diag:true};
+        /* Beside a wall (so its line carries straight on into the new room)
+           is what's nearly always meant. The diagonal only when the tap is
+           clearly out past both walls. Inside or on the fence: the side the
+           tap leans to. */
+        var cp=(a1>16&&b1>16)?cd:(a1>=b1?c1:c2);
+        /* all three, for the next tap to choose between once it shows which
+           way the wall runs */
+        var cands=[c1,c2,cd].filter(function(c){return ringWhere(c.pt,r.si,rings)!=='in';});
         /* close to the room's corner, or (zoomed in, where the snap spot sits
            well off it) close to the snap spot itself */
         var Sp=W2S(cp.pt),d=Math.min(dC,Math.hypot(screenP.x-Sp.x,screenP.y-Sp.y));
         /* only a real outside corner of the rooms together: not one tucked
            inside the room next door */
-        if(d<bvd&&ringWhere(cp.pt,r.si,rings)!=='in'){bvd=d;bv={pt:cp.pt,room:r.name,keys:cp.keys};}
+        if(d<bvd&&ringWhere(cp.pt,r.si,rings)!=='in'){bvd=d;bv={pt:cp.pt,room:r.name,keys:cp.keys,cands:cands};}
       }
       var v=W2S(r.off[i]);
       var a=v,b=W2S(r.off[(i+1)%n]),dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy;if(L2<1)continue;
@@ -1383,7 +1395,8 @@ function roomSnap(q,screenP,vR,eR){
       }
     }
   });
-  if(bv)return{pt:{x:rnd(bv.pt.x),y:rnd(bv.pt.y)},room:bv.room,keys:bv.keys};
+  if(bv)return{pt:{x:rnd(bv.pt.x),y:rnd(bv.pt.y)},room:bv.room,keys:bv.keys,
+    cands:bv.cands.map(function(c){return{pt:{x:rnd(c.pt.x),y:rnd(c.pt.y)},keys:c.keys,diag:!!c.diag};})};
   if(be){
     var o=(q.x-be.O.x)*be.nrm.x+(q.y-be.O.y)*be.nrm.y;
     return{pt:{x:rnd(q.x-be.nrm.x*o),y:rnd(q.y-be.nrm.y*o)},room:be.room,keys:be.keys};
@@ -1430,6 +1443,45 @@ function routeAround(L,P,r){
   var okF=clear(f),okB=clear(bk);
   var pick=(okF&&!okB)?f:(okB&&!okF)?bk:(len(f)<=len(bk)?f:bk);
   return pick.map(function(q){return{x:rnd(q.x),y:rnd(q.y)};});
+}
+/* Add a corner; if the one before it now sits in a straight line between
+   its neighbours, it isn't a corner at all, so drop it (one wall, not two). */
+function pushCorner(q){
+  var n=S.pts.length;
+  if(n&&Math.hypot(q.x-S.pts[n-1].x,q.y-S.pts[n-1].y)<0.3)return;   /* same spot */
+  if(n>=2){
+    var A=S.pts[n-2],B=S.pts[n-1];
+    var cr=(B.x-A.x)*(q.y-A.y)-(B.y-A.y)*(q.x-A.x);
+    var dot=(B.x-A.x)*(q.x-B.x)+(B.y-A.y)*(q.y-B.y);
+    if(Math.abs(cr)<0.5*Math.hypot(q.x-A.x,q.y-A.y)&&dot>0&&n-1>0)S.pts.splice(n-1,1);
+  }
+  S.pts.push(q);
+}
+/* Of the spots by a room's corner, the one that keeps the walls straight.
+   leg: the wall being drawn, from A towards B (only its direction matters).
+   Rules, in order: the wall must not run into a room; a spot whose wall
+   carries on the line of a wall already drawn (the inside faces line up) is
+   best; then one beside a wall rather than the diagonal. */
+function pickCorner(cands,from,to,mode){
+  var horiz=Math.abs(to.x-from.x)>=Math.abs(to.y-from.y);
+  var others=[];var j=cur();
+  (j.shapes||[]).forEach(function(sh,si){if(si!==j.active&&sh.pts)others=others.concat(sh.pts);});
+  var best=null,bs=-1e9;
+  cands.forEach(function(c){
+    var A,B;
+    if(mode==='start'){A=c.pt;B=horiz?{x:to.x,y:c.pt.y}:{x:c.pt.x,y:to.y};}
+    else{ /* arriving: the spot has to sit on the line being walked */
+      if(horiz?Math.abs(c.pt.y-from.y)>0.3:Math.abs(c.pt.x-from.x)>0.3)return;
+      A=from;B=c.pt;
+    }
+    if(crossesRing(A,B))return;
+    var sc=0;
+    var lineVal=horiz?c.pt.y:c.pt.x;
+    if(others.some(function(q){return Math.abs((horiz?q.y:q.x)-lineVal)<0.3;}))sc+=10;  /* carries a wall's line */
+    if(!c.diag)sc+=5;
+    if(sc>bs){bs=sc;best=c;}
+  });
+  return best;
 }
 /* L is the last corner, q0 where the corner was going before any snap (so on
    the line being walked), P where it ended up. If L->P isn't square (or a
@@ -1858,10 +1910,28 @@ function tap(p){
       if(Math.hypot(p.x-F.x,p.y-F.y)<34){closeShape();return;}
     }
     snapshot();
+    /* the second corner shows which way the first wall runs: move the first
+       corner to whichever spot by that room's corner keeps the wall straight */
+    if(isInt()&&S.pts.length===1&&curShape().firstCands){
+      var fc=pickCorner(curShape().firstCands,S.pts[0],S2W(p),'start');
+      if(fc&&(fc.pt.x!==S.pts[0].x||fc.pt.y!==S.pts[0].y)){
+        FMLog.add('restart',{from:[S.pts[0].x,S.pts[0].y],to:[fc.pt.x,fc.pt.y]});
+        S.pts[0]={x:fc.pt.x,y:fc.pt.y};curShape().startKeys=fc.keys;
+      }
+      delete curShape().firstCands;
+    }
     var np=snapPoint(S2W(p));
     if(isInt()){
       var shc=curShape(),q0=np,how=roomSnap(np,p);
-      if(how)np=how.pt;
+      if(how){
+        np=how.pt;
+        if(how.cands&&S.pts.length){
+          /* arriving at a room's corner: the spot on the line being walked */
+          var ac=pickCorner(how.cands,S.pts[S.pts.length-1],np,'arrive');
+          if(ac){np=ac.pt;how.keys=ac.keys;}
+        }
+      }
+      if(how&&how.cands&&!S.pts.length)shc.firstCands=how.cands;
       var ko=keepOutside(np);
       if(ko&&ko.blocked){
         if(hist.length)hist.pop();          /* nothing was added: drop the snapshot */
@@ -1887,7 +1957,7 @@ function tap(p){
           }
           if(K)added=[K];
         }
-        added.forEach(function(q){S.pts.push(q);});
+        added.forEach(pushCorner);
       }
       if(window.FMLog)FMLog.add('corner',{tap:[Math.round(p.x),Math.round(p.y)],aim:[q0.x,q0.y],at:[np.x,np.y],
         snap:how?(how.room+' '+how.keys.join('/')):'',pushedOut:!!ko,added:added.map(function(q){return[q.x,q.y];})});
@@ -1898,13 +1968,13 @@ function tap(p){
         }else if(S.pts.length>=3&&shc.startKeys&&how.keys.some(function(k){return shc.startKeys.indexOf(k)>=0;})){
           /* back on the wall you started against: the last wall runs along it
              to the first corner, so the room is finished */
-          S.pts.push(np);closeShape();
+          pushCorner(np);closeShape();
           say('Closed along '+how.room+'’s wall.');
           render();return;
         }
       }
     }
-    S.pts.push(np);
+    if(isInt())pushCorner(np);else S.pts.push(np);
     render();
   }else if(S.mode==='measure'){
     /* a tighter radius than the drag handle: you have to mean this one,
@@ -4603,6 +4673,10 @@ document.getElementById('redo').addEventListener('click',function(){
 });
 var modal=document.getElementById('modal'),mbox=document.getElementById('modalbox'),pendingDel=null;
 modal.addEventListener('click',function(e){if(e.target===modal)closeModal();});
+/* whichever box is showing: if it has a typing field, move it to the top */
+try{new MutationObserver(function(){
+  modal.classList.toggle('typing',!!mbox.querySelector('input[type=text],textarea'));
+}).observe(mbox,{childList:true,subtree:true});}catch(e){}
 function closeModal(){modal.hidden=true;mbox.innerHTML='';pendingDel=null;}
 function jobStats(j){
   /* walls across every outline (jobs keep outlines in j.shapes; very old
