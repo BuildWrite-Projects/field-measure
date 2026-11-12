@@ -215,6 +215,8 @@ pre#sumtext{font-family:var(--num);font-size:12.5px;line-height:1.6;white-space:
   font-family:var(--display);font-size:14px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
 #findbtn small{display:block;font-family:var(--body);font-size:10.5px;letter-spacing:0;text-transform:none;font-weight:600;opacity:.9}
 #status.clear{color:var(--ok)}
+.jopen.sidepick.on{box-shadow:inset 0 0 0 2px var(--accent)}
+.chip.sidechip,.chip.floorchip{font-weight:700}
 #caret{font-size:11px;opacity:.65;flex:0 0 auto}
 
 #sheet{position:absolute;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-end;z-index:20}
@@ -424,11 +426,20 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
 /* Is this page running inside another page? On GitHub Pages it is not, which
    is what lets the share sheet and a mail draft work. */
 function framedNow(){try{return window.top!==window.self;}catch(e){return true;}}
-var KINDS=[['window','Window','W'],['door','Door','D'],['slider','Slider','S'],
+var EXT_KINDS=[['window','Window','W'],['door','Door','D'],['slider','Slider','S'],
   ['garage','Garage','G'],['bay','Bay / bow','B'],['other','Other','?']];
+var INT_KINDS=[['door','Door','D'],['cased','Cased opening','C'],['window','Window','W'],
+  ['closet','Closet / bifold','B'],['pocket','Pocket door','P'],['other','Other','?']];
+/* Interior or exterior: which side of the job is open. The job keeps both. */
+function isInt(){var j=DB&&DB.jobs&&DB.jobs[DB.active];return !!(j&&j.side==='int');}
+/* KINDS and HEIGHTS follow whichever side is open, so everything that lists
+   them shows the right set without knowing there are two. */
+Object.defineProperty(window,'KINDS',{configurable:true,get:function(){return isInt()?INT_KINDS:EXT_KINDS;}});
 function kindOf(o){return (o&&o.kind)||'window';}
-function kindLabel(k){for(var i=0;i<KINDS.length;i++)if(KINDS[i][0]===k)return KINDS[i][1];return 'Window';}
-function kindGlyph(k){for(var i=0;i<KINDS.length;i++)if(KINDS[i][0]===k)return KINDS[i][2];return 'W';}
+function kindRow(k){var L=KINDS.concat(isInt()?EXT_KINDS:INT_KINDS);
+  for(var i=0;i<L.length;i++)if(L[i][0]===k)return L[i];return null;}
+function kindLabel(k){var r=kindRow(k);return r?r[1]:'Window';}
+function kindGlyph(k){var r=kindRow(k);return r?r[2]:'W';}
 /* Top of foundation is the datum. It is level all the way round, so every
    height below is one honest number taken from it. What is NOT constant is
    how far the dirt sits below that line, and that lives per corner as grade. */
@@ -437,7 +448,7 @@ function kindGlyph(k){for(var i=0;i<KINDS.length;i++)if(KINDS[i][0]===k)return K
    belong to a roof: any two of them plus the span give the third, which is
    why splitting them up left a wing impossible to build from. Every roof
    keeps its own three, the main one included. */
-var HEIGHTS=[
+var EXT_HEIGHTS=[
   {k:'Floor-to-floor',g:'building',note:'foundation top to first floor, then floor to floor'},
   {k:'Soffit depth',g:'building',note:'how far the roof runs out past the eave wall'},
   {k:'Rake overhang',g:'building',note:'how far it runs out past the gable wall'},
@@ -445,6 +456,8 @@ var HEIGHTS=[
   {k:'Main ridge',g:'roof',note:'from top of foundation'},
   {k:'Roof pitch',g:'roof',note:null}
 ];
+/* Inside, the heights that matter are each room's ceiling, kept on the room. */
+Object.defineProperty(window,'HEIGHTS',{configurable:true,get:function(){return isInt()?[]:EXT_HEIGHTS;}});
 function heightNote(k){for(var i=0;i<HEIGHTS.length;i++)if(HEIGHTS[i].k===k)return HEIGHTS[i].note;return null;}
 /* These two were called something else before. The name is also the storage
    key, so a rename on its own would orphan every height already measured.
@@ -483,7 +496,7 @@ function setHeightOff(k,v){
 }
 /* Extra roof masses: a wing, a garage, a cross gable. Each carries its own
    ridge height and its own pitch, because one number cannot be built from. */
-function ridges(){var j=cur();if(!j)return[];if(!j.ridges)j.ridges=[];return j.ridges;}
+function ridges(){if(isInt())return[];var j=cur();if(!j)return[];if(!j.ridges)j.ridges=[];return j.ridges;}
 function ridgeBlanks(){
   var out=[];
   ridges().forEach(function(r,i){
@@ -528,7 +541,37 @@ function readDB(){
   }catch(e){}
   DB={jobs:[blankJob('Job 1')],active:0};
 }
-function cur(){return DB.jobs[DB.active];}
+/* ---------- interior: floors of rooms ----------
+   A job's interior is job.interior = {floors:[...], active}. Each floor is
+   shaped like a job (shapes = its rooms, active, view, snap, heights...) so
+   every tool that works on "the current job's outlines" works on a floor's
+   rooms unchanged. The floor borrows the job's name, units and Job Book link
+   through its prototype; those are never stored on the floor. */
+function curJob(){return DB.jobs[DB.active];}
+function blankFloor(name){
+  return{floor:name,shapes:[blankShape('Room 1')],active:0,heights:{},ridges:[],heightsOff:{},
+    snap:90,view:{ox:0,oy:0,s:1},locked:false,wallT:'4 1/2"'};
+}
+function ensureFloor(f){
+  if(!f.shapes||!f.shapes.length)f.shapes=[blankShape('Room 1')];
+  if(!(f.active>=0&&f.active<f.shapes.length))f.active=0;
+  if(!f.heights)f.heights={};if(!f.ridges)f.ridges=[];if(!f.heightsOff)f.heightsOff={};
+  if(f.snap===undefined)f.snap=90;if(!f.view)f.view={ox:0,oy:0,s:1};
+  if(f.locked===undefined)f.locked=false;if(!f.wallT)f.wallT='4 1/2"';
+  if(!f.floor)f.floor='1st floor';
+}
+function curFloor(j){
+  j=j||curJob();if(!j)return null;
+  if(!j.interior||!j.interior.floors||!j.interior.floors.length)
+    j.interior={floors:[blankFloor('1st floor')],active:0};
+  var I=j.interior;
+  if(!(I.active>=0&&I.active<I.floors.length))I.active=0;
+  var f=I.floors[I.active];
+  ensureFloor(f);
+  if(Object.getPrototypeOf(f)!==j)Object.setPrototypeOf(f,j);
+  return f;
+}
+function cur(){var j=curJob();if(!j)return j;return j.side==='int'?curFloor(j):j;}
 function curShape(){
   var j=cur();if(!j)return null;
   if(!j.shapes||!j.shapes.length){
@@ -565,6 +608,7 @@ function save(){
   var j=cur(),sh=curShape();if(!j||!sh)return;
   sh.pts=S.pts;sh.closed=S.closed;sh.walls=S.walls;sh.openings=S.openings;
   j.heights=S.heights;j.snap=S.snap;j.view=V;j.locked=!!S.locked;j.updated=Date.now();
+  if(curJob()!==j)curJob().updated=j.updated;   /* a floor: the job changed too */
   DB.updated=Date.now();
   try{localStorage.setItem(KEY,JSON.stringify(DB));}catch(e){}
   schedulePush();
@@ -728,7 +772,9 @@ function shapeWallLabel(sh,w){
 }
 /* A tie belongs on anything that is not the first outline. The first outline
    is the house: it is what everything else is measured from. */
-function needsTie(j,si){return si>0;}
+/* Rooms place themselves against each other as they're drawn, so only an
+   exterior outline needs tying to the house. */
+function needsTie(j,si){return si>0&&!isInt();}
 function tieText(j,sh){
   var t=tieOf(sh);
   if(!t||!t.out||!t.along)return '';
@@ -886,11 +932,14 @@ function paint(){
 
   var j0=cur();
   if(j0&&j0.shapes){
-    ctx.save();ctx.globalAlpha=.3;
+    /* the other outlines (or, inside, the other rooms on this floor) drawn
+       faint for context; rooms solid, since together they are the plan */
+    var inside=isInt();
+    ctx.save();ctx.globalAlpha=inside?.5:.3;
     j0.shapes.forEach(function(sh,si){
       if(si===j0.active)return;
       var m=shapeSegs(sh);if(!m)return;
-      ctx.strokeStyle=C.ink2;ctx.lineWidth=2.5;ctx.setLineDash([7,5]);
+      ctx.strokeStyle=C.ink2;ctx.lineWidth=inside?2:2.5;ctx.setLineDash(inside?[]:[7,5]);
       for(var q=0;q<m;q++){
         var a=W2S(sh.pts[q]),b=W2S(sh.pts[(q+1)%sh.pts.length]);
         ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
@@ -1067,9 +1116,17 @@ function paint(){
   if(!S.pts.length){
     ctx.fillStyle=C.ink2;ctx.textAlign='center';
     ctx.font='600 15px "Barlow Condensed",sans-serif';
-    ctx.fillText('TAP A CORNER OF THE HOUSE TO START',W/2,H/2-8);
-    ctx.font='400 12px "IBM Plex Sans",sans-serif';
-    ctx.fillText('Tap to place a corner. Drag to move, pinch to zoom.',W/2,H/2+14);
+    var others=(j0&&j0.shapes||[]).some(function(sh,si){return si!==j0.active&&shapeSegs(sh)>0;});
+    if(isInt()&&others){
+      /* rooms already on the floor: say it up top, out of the plan's way */
+      ctx.fillText('START NEXT TO A ROOM YOU’VE DRAWN',W/2,24);
+      ctx.font='400 12px "IBM Plex Sans",sans-serif';
+      ctx.fillText('Tap just outside its wall, then each corner as you walk.',W/2,44);
+    }else{
+      ctx.fillText(isInt()?'TAP A CORNER OF THE ROOM TO START':'TAP A CORNER OF THE HOUSE TO START',W/2,H/2-8);
+      ctx.font='400 12px "IBM Plex Sans",sans-serif';
+      ctx.fillText('Tap to place a corner. Drag to move, pinch to zoom.',W/2,H/2+14);
+    }
   }
 }
 
@@ -1087,8 +1144,13 @@ function snapPoint(p){
      back flush with the wall they jog off. In square mode only the free
      coordinate moves, so the wall stays square. */
   var tol=16/V.s,bx=null,by=null,bdx=tol,bdy=tol;
-  for(var i=0;i<S.pts.length;i++){
-    var P=S.pts[i];
+  /* inside, also line up with the corners of the other rooms on the floor,
+     so walls that run through from room to room stay in line */
+  var cand=S.pts;
+  if(isInt()){var jf=cur();cand=S.pts.slice();
+    (jf.shapes||[]).forEach(function(sh,si){if(si!==jf.active&&sh.pts)cand=cand.concat(sh.pts);});}
+  for(var i=0;i<cand.length;i++){
+    var P=cand[i];
     if(Math.abs(q.x-P.x)<bdx){bdx=Math.abs(q.x-P.x);bx=P.x;}
     if(Math.abs(q.y-P.y)<bdy){bdy=Math.abs(q.y-P.y);by=P.y;}
   }
@@ -1100,6 +1162,56 @@ function snapPoint(p){
     if(by!==null)q.y=by;
   }
   return{x:Math.round(q.x),y:Math.round(q.y)};
+}
+/* ---------- rooms that snap together ----------
+   A corner tapped close to a wall of another room on this floor lands one
+   wall-thickness outside that wall, so the room you're drawing sits against
+   the one next door with the wall between them. The first corner snaps right
+   onto that line; later corners only slide toward it along a wall that runs
+   square to it, so the room stays square. */
+function wallThick16(){var f=cur();return dim16((f&&f.wallT)||'4 1/2"')||72;}
+function roomSnap(q,screenP){
+  var j=cur();if(!j||!j.shapes)return null;
+  var best=null,bd=24;
+  j.shapes.forEach(function(sh,si){
+    if(si===j.active||!sh.closed||!sh.pts||sh.pts.length<3)return;
+    var n=sh.pts.length;
+    /* drawing units per sixteenth, from this room's own measured walls */
+    var sc=withShape(sh,scaleFactor),tW=sc?wallThick16()/sc:8;
+    for(var i=0;i<n;i++){
+      var A=sh.pts[i],B=sh.pts[(i+1)%n],a=W2S(A),b=W2S(B);
+      var dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy;if(L2<1)continue;
+      var t=((screenP.x-a.x)*dx+(screenP.y-a.y)*dy)/L2;
+      if(t<-0.15||t>1.15)continue;
+      var px=a.x+t*dx,py=a.y+t*dy,d=Math.hypot(screenP.x-px,screenP.y-py);
+      if(d>=bd)continue;
+      /* outward normal: the side of the wall that is NOT inside that room */
+      var wx=B.x-A.x,wy=B.y-A.y,wl=Math.hypot(wx,wy)||1,nx=-wy/wl,ny=wx/wl;
+      var mid={x:(A.x+B.x)/2,y:(A.y+B.y)/2};
+      if(pointInPoly({x:mid.x+nx*2,y:mid.y+ny*2},sh.pts)){nx=-nx;ny=-ny;}
+      /* only the face you tapped beside: at a corner the wall you're inside
+         the line of isn't the one you meant */
+      if((screenP.x-a.x)*nx+(screenP.y-a.y)*ny<-3)continue;
+      /* after the first corner, only a wall this new wall runs square into */
+      if(S.pts.length){
+        var Lp=S.pts[S.pts.length-1],sx0=q.x-Lp.x,sy0=q.y-Lp.y,sl0=Math.hypot(sx0,sy0);
+        if(!sl0||Math.abs((sx0*wx+sy0*wy)/(sl0*wl))>0.2)continue;
+      }
+      /* tapped near either end: that end, so the room starts at a corner */
+      var endAt=null;
+      if(Math.hypot(screenP.x-a.x,screenP.y-a.y)<34)endAt=A;
+      else if(Math.hypot(screenP.x-b.x,screenP.y-b.y)<34)endAt=B;
+      bd=d;best={A:A,ux:wx/wl,uy:wy/wl,nx:nx,ny:ny,t:tW,room:sh.name,endAt:endAt};
+    }
+  });
+  if(!best)return null;
+  /* signed distance from q to the offset line, measured along the normal */
+  var off=(q.x-best.A.x)*best.nx+(q.y-best.A.y)*best.ny-best.t;
+  if(!S.pts.length&&best.endAt){
+    /* first corner by that wall's end: right at the end, a wall's thickness out */
+    return{pt:{x:Math.round(best.endAt.x+best.nx*best.t),y:Math.round(best.endAt.y+best.ny*best.t)},room:best.room};
+  }
+  return{pt:{x:Math.round(q.x-best.nx*off),y:Math.round(q.y-best.ny*off)},room:best.room};
 }
 function hitWall(p){
   var n=segCount(),best=-1,bt=0,bd=28;
@@ -1364,8 +1476,13 @@ function eraseWall(wi){
   snapshot();rebuildRing(items);return true;
 }
 function fitView(){
-  if(!S.pts.length){V={ox:0,oy:0,s:1};paint();return;}
-  var xs=S.pts.map(function(q){return q.x;}),ys=S.pts.map(function(q){return q.y;});
+  var P=S.pts;
+  /* a new room with nothing drawn yet: show the rest of the floor around it */
+  if(!P.length&&isInt()){
+    P=[];(cur().shapes||[]).forEach(function(sh){if(sh.pts)P=P.concat(sh.pts);});
+  }
+  if(!P.length){V={ox:0,oy:0,s:1};paint();return;}
+  var xs=P.map(function(q){return q.x;}),ys=P.map(function(q){return q.y;});
   var x0=Math.min.apply(null,xs),x1=Math.max.apply(null,xs),
       y0=Math.min.apply(null,ys),y1=Math.max.apply(null,ys);
   var pad=52,bw=Math.max(1,x1-x0),bh=Math.max(1,y1-y0);
@@ -1441,13 +1558,20 @@ function tap(p){
       var F=W2S(S.pts[0]);
       if(Math.hypot(p.x-F.x,p.y-F.y)<24){closeShape();return;}
     }
-    snapshot();S.pts.push(snapPoint(S2W(p)));
+    snapshot();
+    var np=snapPoint(S2W(p));
+    if(isInt()){
+      var rs=roomSnap(np,p);
+      if(rs){np=rs.pt;if(S.pts.length===0)say('Started against '+rs.room+' — one wall’s thickness out from it. Now tap each corner as you walk the room.');}
+    }
+    S.pts.push(np);
     render();
   }else if(S.mode==='measure'){
     /* a tighter radius than the drag handle: you have to mean this one,
        so a tap meant for the wall doesn't open the grade sheet */
     var gc=-1,gd=15;
-    for(var gi=0;gi<S.pts.length;gi++){
+    /* grade (dirt below the foundation) is an outside reading only */
+    for(var gi=0;gi<S.pts.length&&!isInt();gi++){
       var gq=W2S(S.pts[gi]),gdd=Math.hypot(p.x-gq.x,p.y-gq.y);
       if(gdd<gd){gd=gdd;gc=gi;}
     }
@@ -2482,7 +2606,7 @@ function askOpening(i,isNew){
     var ix=S.openings.indexOf(o);if(ix>=0)S.openings.splice(ix,1);
     closeSheet();render();
   };
-  if(!o.kind)o.kind='window';
+  if(!o.kind)o.kind=isInt()?'door':'window';
   openSheet({title:'Opening on wall '+(o.wall+1),
     kinds:{value:o.kind,onPick:function(k){o.kind=k;}},
     flag:{label:'Estimated',value:!!o.approx,onPick:function(v){o.approx=v;}},
@@ -2596,6 +2720,94 @@ function askHeight(name){
       else{setHeightOff(name,false);S.heights[name]=v[0];}
       render();
     }});
+}
+/* ---------- ceilings (interior) ----------
+   Each room keeps its own: sh.ceiling = {type, ...}. All heights are from
+   the finished floor.
+     flat    h
+     sloped  low, high, lowWall (the wall the low side runs along)
+     tray    h (main ceiling), raised (top of the tray), step (in from walls) */
+var CEIL_TYPES=[['flat','Flat','One height across the room'],
+  ['sloped','Sloped / vaulted','Rises from a low side to a high side'],
+  ['tray','Tray / coffered','A raised center stepped in from the walls']];
+var CEIL_FIELDS={
+  flat:[['h','Ceiling height']],
+  sloped:[['low','Low side height'],['high','High side height']],
+  tray:[['h','Main ceiling height'],['raised','Tray height (top)'],['step','Step in from the walls']]
+};
+function ceilOf(sh){sh=sh||curShape();if(!sh.ceiling)sh.ceiling={type:''};return sh.ceiling;}
+function ceilTypeLabel(t){for(var i=0;i<CEIL_TYPES.length;i++)if(CEIL_TYPES[i][0]===t)return CEIL_TYPES[i][1];return '';}
+function ceilDone(sh){
+  var c=sh.ceiling;if(!c||!c.type)return false;
+  var ok=CEIL_FIELDS[c.type].every(function(f){return !!c[f[0]];});
+  if(c.type==='sloped'&&!(c.lowWall>=0))ok=false;
+  return ok;
+}
+function ceilText(sh){
+  var c=sh.ceiling;if(!c||!c.type)return '';
+  if(c.type==='flat')return showLen(c.h)||'';
+  if(c.type==='sloped')return (c.low||c.high)?((showLen(c.low)||'?')+' to '+(showLen(c.high)||'?')):'';
+  return (c.h||c.raised)?((showLen(c.h)||'?')+', tray '+(showLen(c.raised)||'?')):'';
+}
+function openCeilingType(next){
+  var sh=curShape(),c=ceilOf(sh);
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',sh.name+' — ceiling'));
+  CEIL_TYPES.forEach(function(t){
+    var b=el('button','jopen sidepick'+(c.type===t[0]?' on':''));
+    b.innerHTML='<b></b><small></small>';
+    b.querySelector('b').textContent=t[1];b.querySelector('small').textContent=t[2];
+    b.addEventListener('click',function(){
+      var was=c.type;
+      if(was!==t[0])recordMeas(function(){c.type=was;},lastWall);
+      c.type=t[0];closeModal();render();
+      if(next!==false)askCeiling();
+    });
+    var row=el('div','jrow');row.appendChild(b);mbox.appendChild(row);
+  });
+  var cl=el('button','mbtn msecondary','Close');
+  cl.addEventListener('click',function(){closeModal();render();});
+  mbox.appendChild(cl);
+}
+/* which wall the low side of a sloped ceiling runs along */
+function openCeilingWall(){
+  var c=ceilOf(),n=segCount();
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle','Which wall is the low side?'));
+  mbox.appendChild(el('div','sub','The wall the ceiling comes down to. Wall numbers are on the drawing.'));
+  for(var w=0;w<n;w++)(function(w){
+    var b=el('button','mbtn '+(c.lowWall===w?'mprimary':'msecondary'),
+      'Wall '+(w+1)+(wallLen(w)?'  ·  '+showLen(wallLen(w)):''));
+    b.addEventListener('click',function(){
+      var was=c.lowWall;recordMeas(function(){c.lowWall=was;},lastWall);
+      c.lowWall=w;closeModal();render();
+    });
+    mbox.appendChild(b);
+  })(w);
+  var cl=el('button','mbtn msecondary','Close');
+  cl.addEventListener('click',function(){closeModal();render();});
+  mbox.appendChild(cl);
+}
+function askCeiling(){
+  var sh=curShape(),c=ceilOf(sh);
+  if(!c.type){openCeilingType();return;}
+  SHremove=null;
+  var F=CEIL_FIELDS[c.type];
+  openSheet({title:sh.name+' — '+ceilTypeLabel(c.type).toLowerCase()+' ceiling',
+    fields:F.map(function(f){return{label:f[1],value:c[f[0]]||''};}),
+    done:function(v){
+      var was={};F.forEach(function(f){was[f[0]]=c[f[0]];});
+      recordMeas(function(){F.forEach(function(f){c[f[0]]=was[f[0]];});},lastWall);
+      F.forEach(function(f,i){c[f[0]]=v[i];});
+      render();
+      if(c.type==='sloped'&&!(c.lowWall>=0)&&segCount())openCeilingWall();
+    }});
+}
+function askWallT(){
+  var f=cur();SHremove=null;
+  openSheet({title:'Wall thickness on '+f.floor,
+    fields:[{label:'Wall to wall, through the wall',value:f.wallT||'4 1/2"'}],
+    done:function(v){if(v[0])f.wallT=v[0];render();}});
 }
 /* An extra roof mass: its own ridge height and its own pitch. */
 function askRidge(i,field){
@@ -2761,6 +2973,9 @@ function blanks(){
     for(var q=0;q<m;q++)
       if(!(sh.walls&&sh.walls[q]&&sh.walls[q].len))
         walls.push({shape:si,kind:'wall',idx:q,label:sh.name+' wall '+(q+1)});
+    /* inside, a drawn room with no finished ceiling is a blank too */
+    if(isInt()&&m&&!ceilDone(sh))
+      hts.push({shape:si,kind:'ceiling',label:'the ceiling in '+sh.name});
     (sh.openings||[]).forEach(function(o,oi){
       if(!(o.w&&o.h))opens.push({shape:si,kind:'opening',idx:oi,
         label:'an opening on '+sh.name+' wall '+(o.wall+1)});
@@ -2860,6 +3075,12 @@ function goToBlank(){
     askRidge(b.idx,b.field);
     return;
   }
+  if(b.kind==='ceiling'){
+    if(cur().active!==b.shape){save();cur().active=b.shape;intoState();fitView();}
+    setMode('measure');openTab('heights');render();
+    askCeiling();
+    return;
+  }
   if(b.kind==='tie'){
     if(cur().active!==b.shape){save();cur().active=b.shape;intoState();}
     openTab('walls');
@@ -2937,10 +3158,11 @@ function drawingCanvas(){
   }
   g.textAlign='left';g.textBaseline='alphabetic';
   g.fillStyle=INK;g.font='700 40px "Barlow Condensed",Arial,sans-serif';
-  g.fillText((j.name||'Field measure').toUpperCase(),PAD-40,62);
+  g.fillText(((j.name||'Field measure')+(isInt()?' \u2014 '+j.floor:'')).toUpperCase(),PAD-40,62);
   g.fillStyle=INK2;g.font='400 20px "IBM Plex Sans",Arial,sans-serif';
   g.fillText(new Date().toLocaleDateString()+'   \u00b7   '+
-    (units()==='in'?'inches':'feet & inches')+'   \u00b7   heights from top of foundation',PAD-40,92);
+    (units()==='in'?'inches':'feet & inches')+'   \u00b7   '+
+    (isInt()?'inside faces, ceilings from the finished floor':'heights from top of foundation'),PAD-40,92);
   g.lineCap='round';g.lineJoin='round';
   shapes.forEach(function(sh){
     withShape(sh,function(){
@@ -3357,14 +3579,27 @@ function afterSheetFromReview(){
 }
 function closeReview(){document.getElementById('review').hidden=true;}
 function summaryText(){
-  var out=[],j=cur();
-  out.push('EXTERIOR MEASURE'+(j?' \u2014 '+j.name:''));
+  var out=[],j=cur(),inside=isInt();
+  out.push((inside?'INTERIOR MEASURE':'EXTERIOR MEASURE')+(j?' \u2014 '+j.name:'')+(inside?' \u2014 '+j.floor:''));
   out.push('All measurements shown in '+(units()==='in'?'inches':'feet and inches')+'.');
+  if(inside){
+    out.push('Inside faces of each room. Ceiling heights from the finished floor.');
+    out.push('Wall thickness between rooms: '+(showLen(j.wallT)||j.wallT));
+  }
   (j&&j.shapes?j.shapes:[curShape()]).forEach(function(sh,si){
     withShape(sh,function(){
       var n=segCount();
       out.push('');
       out.push(sh.name.toUpperCase()+'  ('+n+' walls, in order walked)');
+      if(inside){
+        var c=sh.ceiling||{};
+        if(!c.type)out.push('  CEILING  \u2014 MISSING \u2014');
+        else if(c.type==='flat')out.push('  CEILING  flat, '+(showLen(c.h)||'\u2014 MISSING \u2014'));
+        else if(c.type==='sloped')out.push('  CEILING  sloped, low side '+(showLen(c.low)||'\u2014 MISSING \u2014')+
+          ' along wall '+((c.lowWall>=0)?(c.lowWall+1):'\u2014 MISSING \u2014')+', high side '+(showLen(c.high)||'\u2014 MISSING \u2014'));
+        else out.push('  CEILING  tray, main '+(showLen(c.h)||'\u2014 MISSING \u2014')+', tray top '+
+          (showLen(c.raised)||'\u2014 MISSING \u2014')+', stepped in '+(showLen(c.step)||'\u2014 MISSING \u2014'));
+      }
       /* where it sits, before anything else about it — this is the line that
          lets it be placed in SketchUp at all */
       if(j&&needsTie(j,si)){
@@ -3406,6 +3641,7 @@ function summaryText(){
       }
     });
   });
+  if(inside)return out.join('\n');
   out.push('');
   out.push('HEIGHTS');
   out.push('  (all measured from top of foundation, which runs level)');
@@ -3495,6 +3731,22 @@ function render(){
         if(line)view.appendChild(el('div',line[0],line[1]));
       }
     });
+  }else if(S.tab==='heights'&&isInt()){
+    /* inside: this room's ceiling, from the finished floor */
+    var shc=curShape(),cc=ceilOf(shc),cdone=ceilDone(shc);
+    view.appendChild(el('div','tally'+(cdone?' done':''),
+      shc.name+' ceiling'+(cdone?'  ✓':(cc.type?' — not finished':' — not taken yet'))));
+    view.appendChild(el('div','chk','Heights are from the finished floor.'));
+    view.appendChild(rowBtn('Type',null,ceilTypeLabel(cc.type)||'pick one',function(){openCeilingType();}));
+    if(cc.type){
+      CEIL_FIELDS[cc.type].forEach(function(f){
+        view.appendChild(rowBtn(f[1],null,showLen(cc[f[0]]),function(){askCeiling();}));
+      });
+      if(cc.type==='sloped')
+        view.appendChild(rowBtn('Low side is along',null,(cc.lowWall>=0)?('Wall '+(cc.lowWall+1)):'',openCeilingWall));
+    }
+    view.appendChild(el('div','sub',cur().floor));
+    view.appendChild(rowBtn('Wall thickness','between rooms on this floor',showLen(cur().wallT),askWallT));
   }else if(S.tab==='heights'){
     /* Anything switched off counts as dealt with, not as missing. */
     var wanted=HEIGHTS.filter(function(h){return !heightOff(h.k);});
@@ -3720,12 +3972,14 @@ function render(){
   drawShapeBar();
   var anySeg=0,jj=cur();
   (jj&&jj.shapes?jj.shapes:[]).forEach(function(sh){anySeg+=shapeSegs(sh);});
-  var blList=blanks(),cnt={wall:0,opening:0,height:0,gap:0,tie:0};
+  var blList=blanks(),cnt={wall:0,opening:0,height:0,gap:0,tie:0,ceiling:0};
   blList.forEach(function(b){cnt[b.kind]=(cnt[b.kind]||0)+1;});
-  var missWalls=cnt.wall,missO=cnt.opening,missH=cnt.height,missG=cnt.gap,missT=cnt.tie;
+  var missWalls=cnt.wall,missO=cnt.opening,missH=cnt.height,missG=cnt.gap,missT=cnt.tie,missC=cnt.ceiling;
   var total=blList.length;
   var st=document.getElementById('status'),stt=document.getElementById('statustext');
-  if(!anySeg){st.className='';stt.textContent='Draw the footprint first — tap each corner as you walk.';}
+  var htab=document.querySelector('.tab[data-tab="heights"]');
+  if(htab)htab.textContent=isInt()?'Ceiling':'Heights';
+  if(!anySeg){st.className='';stt.textContent=isInt()?'Draw the room first — tap each corner as you walk it.':'Draw the footprint first — tap each corner as you walk.';}
   else if(total===0){st.className='clear';stt.textContent='Nothing blank. Good to leave the site.';}
   else{
     st.className='';
@@ -3735,7 +3989,8 @@ function render(){
           missT?missT+' location'+(missT>1?'s':''):'',
           missO?missO+' opening'+(missO>1?'s':''):'',
           missG?missG+' spacing':'',
-          missH?missH+' height'+(missH>1?'s':''):''].filter(Boolean).join(', ')+'.';
+          missH?missH+' height'+(missH>1?'s':''):'',
+          missC?missC+' ceiling'+(missC>1?'s':''):''].filter(Boolean).join(', ')+'.';
   }
   var fb=document.getElementById('findbtn');
   var anyWork=anySeg>0;
@@ -3821,7 +4076,12 @@ function hintText(){
     : 'Drag a picked corner to slide all '+alignSel.length+' as one piece. Tap open paper when done, or the button to flatten them onto one line.';
   if(S.mode==='measure'&&lastWall>=0&&lastWall<segCount())
     return 'Wall '+(lastWall+1)+' selected. Tap it again to type the length, or shoot it with the Disto. Tap open paper to let go.';
+  if(S.mode==='measure'&&isInt())return 'Tap a wall to select it, then tap it again for its length \u2014 or shoot it with the Disto. The ceiling is in the Ceiling tab below.';
   if(S.mode==='measure')return 'Tap a wall for its length, or a corner for its grade \u2014 how far the dirt sits below the top of the foundation. Drag a corner to stretch it.';
+  if(S.mode==='draw'&&isInt()&&!S.pts.length)
+    return cur().shapes.length>1
+      ? 'Start '+curShape().name+' next to a room you\u2019ve drawn: tap just outside its wall and it starts one wall-thickness away. Then tap each corner as you walk.'
+      : 'Tap each corner of '+curShape().name+' as you walk it. Tap the orange first corner to close it.';
   if(S.mode==='open')return 'Tap a wall where a window or door sits to add one. Tap an opening already there to edit or remove it.';
   if(S.snap===90)return 'Tap to place a corner. Drag one onto its neighbour to join them. Drag anywhere else to move the paper.';
   if(S.snap===45)return 'Corners lock to 45\u00b0 steps for clipped corners and angled bays. Dragging a corner keeps every angle.';
@@ -3958,13 +4218,108 @@ function jobStats(j){
     n+=c;for(var i=0;i<c;i++)if(sh.walls&&sh.walls[i]&&sh.walls[i].len)done++;
   });
   var offj=j.heightsOff||{};
-  var wantj=HEIGHTS.filter(function(h){return !offj[h.k];});
+  var wantj=EXT_HEIGHTS.filter(function(h){return !offj[h.k];});
   var hd=wantj.filter(function(h){return j.heights&&j.heights[h.k];}).length;
-  if(!n)return'Nothing drawn yet';
-  return done+'/'+n+' walls · '+hd+'/'+wantj.length+' heights · '+
+  /* rooms drawn inside, across every floor */
+  var rooms=0;
+  if(j.interior&&j.interior.floors)j.interior.floors.forEach(function(f){
+    (f.shapes||[]).forEach(function(sh){if(shapeSegs(sh))rooms++;});
+  });
+  var inside=rooms?(' · '+rooms+' room'+(rooms>1?'s':'')+' inside'):'';
+  if(!n)return rooms?('Outside not drawn'+inside):'Nothing drawn yet';
+  return done+'/'+n+' walls · '+hd+'/'+wantj.length+' heights'+inside+' · '+
     new Date(j.updated||Date.now()).toLocaleDateString(undefined,{month:'numeric',day:'numeric'});
 }
-function switchTo(i){save();DB.active=i;intoState();closeModal();setMode(S.closed?'measure':'draw');fitView();render();}
+function switchTo(i){save();DB.active=i;intoState();closeModal();setMode(S.closed?'measure':'draw');fitView();render();openSidePicker();}
+/* ---------- Exterior or Interior ---------- */
+function setSide(side){
+  var j=curJob();if(!j)return;
+  save();                       /* store what's open before changing what cur() is */
+  j.side=(side==='int')?'int':'ext';
+  intoState();closeModal();setMode(S.closed?'measure':'draw');fitView();render();save();
+}
+function openSidePicker(){
+  var j=curJob();if(!j)return;
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',j.name));
+  [['ext','Exterior','The outside of the house: walls, openings, heights and roofs.'],
+   ['int','Interior','Rooms by floor: walls, doors and windows, and each room’s ceiling.']]
+  .forEach(function(s){
+    var b=el('button','jopen sidepick'+(((j.side||'ext')===s[0])?' on':''));
+    b.innerHTML='<b></b><small></small>';
+    b.querySelector('b').textContent=s[1];
+    b.querySelector('small').textContent=s[2];
+    b.addEventListener('click',function(){setSide(s[0]);});
+    var row=el('div','jrow');row.appendChild(b);mbox.appendChild(row);
+  });
+  var cl=el('button','mbtn msecondary','Close');
+  cl.addEventListener('click',closeModal);
+  mbox.appendChild(cl);
+}
+/* ---------- floors ---------- */
+function switchFloor(k){
+  save();var j=curJob();j.interior.active=k;
+  intoState();closeModal();setMode(S.closed?'measure':'draw');fitView();render();
+}
+function openFloors(){
+  var j=curJob();curFloor(j);
+  var I=j.interior;
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle','Floors'));
+  I.floors.forEach(function(f,k){
+    var n=(f.shapes||[]).filter(function(sh){return shapeSegs(sh)>0;}).length;
+    var b=el('button','jopen');b.innerHTML='<b></b><small></small>';
+    b.querySelector('b').textContent=f.floor+(k===I.active?'  ·  open':'');
+    b.querySelector('small').textContent=n?(n+' room'+(n>1?'s':'')+' drawn'):'No rooms drawn yet';
+    b.addEventListener('click',function(){if(k!==I.active)switchFloor(k);else closeModal();});
+    var row=el('div','jrow'+(k===I.active?' jcur':''));row.appendChild(b);mbox.appendChild(row);
+  });
+  var add=el('button','mbtn mprimary','Add a floor');
+  add.addEventListener('click',function(){openFloorName(null);});
+  var rn=el('button','mbtn msecondary','Rename this floor');
+  rn.addEventListener('click',function(){openFloorName(I.floors[I.active]);});
+  mbox.appendChild(add);mbox.appendChild(rn);
+  if(I.floors.length>1){
+    var dl=el('button','mbtn mdanger','Delete this floor');
+    dl.addEventListener('click',function(){
+      var f=I.floors[I.active];
+      confirmBox('Delete '+f.floor,'Every room on it, and every measurement in them, goes too. This cannot be undone.',
+        'Delete',function(){
+          I.floors.splice(I.active,1);
+          if(I.active>=I.floors.length)I.active=I.floors.length-1;
+          intoState();setMode(S.closed?'measure':'draw');fitView();render();
+        });
+    });
+    mbox.appendChild(dl);
+  }
+  var cl=el('button','mbtn msecondary','Close');
+  cl.addEventListener('click',closeModal);
+  mbox.appendChild(cl);
+}
+function openFloorName(f){
+  var j=curJob(),I=j.interior;
+  var used=I.floors.map(function(x){return x.floor.toLowerCase();});
+  var guess=['1st floor','2nd floor','Basement','3rd floor','Attic','Garage']
+    .filter(function(x){return used.indexOf(x.toLowerCase())<0;})[0]||('Floor '+(I.floors.length+1));
+  modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',f?'Rename floor':'New floor'));
+  var inp=document.createElement('input');
+  inp.type='text';inp.id='jobnameinput';inp.placeholder='e.g. 2nd floor';
+  inp.value=f?f.floor:guess;
+  mbox.appendChild(inp);
+  var row=el('div','crow');
+  var no=el('button','mbtn msecondary','Cancel');
+  no.addEventListener('click',openFloors);
+  var ok=el('button','mbtn mprimary',f?'Save name':'Start drawing');
+  ok.addEventListener('click',function(){
+    var nm=(inp.value||'').trim()||(f?f.floor:guess);
+    if(f){f.floor=nm;save();closeModal();render();return;}
+    save();I.floors.push(blankFloor(nm));I.active=I.floors.length-1;
+    intoState();closeModal();setMode('draw');fitView();render();
+  });
+  row.appendChild(no);row.appendChild(ok);mbox.appendChild(row);
+  setTimeout(function(){try{inp.focus();inp.select();}catch(e){}},60);
+}
 function confirmBox(title,msg,okLabel,onOk){
   pendingDel=null;modal.hidden=false;mbox.innerHTML='';
   mbox.appendChild(el('div','mtitle',title));
@@ -3988,7 +4343,7 @@ function openJobs(){
     open.innerHTML='<b></b><small></small>';
     open.querySelector('b').textContent=j.name+(i===DB.active?'  ·  open':'');
     open.querySelector('small').textContent=jobStats(j)+'  ·  '+jobLinkNote(j);
-    open.addEventListener('click',function(){if(i!==DB.active)switchTo(i);else closeModal();});
+    open.addEventListener('click',function(){if(i!==DB.active)switchTo(i);else openSidePicker();});
     var del=el('button','jdel','✕');
     del.setAttribute('aria-label','Delete '+j.name);
     del.addEventListener('click',function(){pendingDel=j.id;drawConfirm(j,i);});
@@ -3998,7 +4353,7 @@ function openJobs(){
   var ur=el('div','crow');
   [['ftin','Feet & inches'],['in','Inches']].forEach(function(u){
     var b=el('button','mbtn '+(units()===u[0]?'mprimary':'msecondary'),u[1]);
-    b.addEventListener('click',function(){cur().units=u[0];save();render();openJobs();});
+    b.addEventListener('click',function(){curJob().units=u[0];save();render();openJobs();});
     ur.appendChild(b);
   });
   mbox.appendChild(ur);
@@ -4041,6 +4396,7 @@ function drawConfirm(j,i){
 function startJob(name,bookJobId,bookPending){
   save();var nj=blankJob(name,bookJobId,bookPending);DB.jobs.push(nj);DB.active=DB.jobs.length-1;
   intoState();closeModal();setMode('draw');fitView();render();save();
+  openSidePicker();
 }
 function openNewJob(){
   pendingDel=null;modal.hidden=false;mbox.innerHTML='';
@@ -4142,8 +4498,10 @@ document.getElementById('jobbtn').addEventListener('click',openJobs);
 function switchShape(i){save();cur().active=i;intoState();setMode(S.closed?'measure':'draw');render();}
 function addShape(){
   var j=cur(),used=j.shapes.map(function(x){return x.name.toLowerCase();});
-  var guess=['Pool','Shed','Patio','Deck','Garage','Porch'].filter(function(x){return used.indexOf(x.toLowerCase())<0;})[0]
-            ||('Shape '+(j.shapes.length+1));
+  var list=isInt()?['Kitchen','Living room','Dining room','Hall','Bath','Bedroom','Closet','Laundry','Office','Pantry']
+                  :['Pool','Shed','Patio','Deck','Garage','Porch'];
+  var guess=list.filter(function(x){return used.indexOf(x.toLowerCase())<0;})[0]
+            ||((isInt()?'Room ':'Shape ')+(j.shapes.length+1));
   openShapeName(null,guess);
 }
 /* An outline that gets deleted takes its index with it, and any tie pointing
@@ -4158,9 +4516,10 @@ function reindexTies(j,removed){
 }
 function openShapeName(sh,guess){
   modal.hidden=false;mbox.innerHTML='';
-  mbox.appendChild(el('div','mtitle',sh?'Rename outline':'New outline'));
+  var word=isInt()?'room':'outline';
+  mbox.appendChild(el('div','mtitle',(sh?'Rename ':'New ')+word));
   var inp=document.createElement('input');
-  inp.type='text';inp.id='jobnameinput';inp.placeholder='e.g. Pool';
+  inp.type='text';inp.id='jobnameinput';inp.placeholder=isInt()?'e.g. Kitchen':'e.g. Pool';
   inp.value=sh?sh.name:guess;
   mbox.appendChild(inp);
   var row=el('div','crow');
@@ -4183,7 +4542,7 @@ function openShapeMenu(sh,i){
   var info=el('div','warn');
   var nseg=shapeSegs(sh),nd=0;
   for(var k=0;k<nseg;k++)if(sh.walls&&sh.walls[k]&&sh.walls[k].len)nd++;
-  info.textContent=nseg?nd+' of '+nseg+' walls measured.':'Nothing drawn on this outline yet.';
+  info.textContent=nseg?nd+' of '+nseg+' walls measured.':('Nothing drawn in this '+(isInt()?'room':'outline')+' yet.');
   mbox.appendChild(info);
   var jm=cur();
   if(jm&&needsTie(jm,i)){
@@ -4208,10 +4567,10 @@ function openShapeMenu(sh,i){
   rn.addEventListener('click',function(){openShapeName(sh);});
   mbox.appendChild(rn);
   if(cur().shapes.length>1){
-    var dl=el('button','mbtn mdanger','Delete this outline');
+    var dl=el('button','mbtn mdanger','Delete this '+(isInt()?'room':'outline'));
     dl.addEventListener('click',function(){
       mbox.innerHTML='';
-      mbox.appendChild(el('div','mtitle','Delete outline'));
+      mbox.appendChild(el('div','mtitle','Delete '+(isInt()?'room':'outline')));
       var w=el('div','warn');w.innerHTML='<b>This cannot be undone.</b>';
       var w2=el('div','warn');
       w2.textContent='“'+sh.name+'” and every measurement on it will be removed. The rest of the job stays.';
@@ -4240,6 +4599,15 @@ function drawShapeBar(){
   bar.innerHTML='';
   if(!j)return;
   curShape();
+  /* which side of the job is open; tap to switch */
+  var sd=el('button','chip sidechip',isInt()?'Interior ▾':'Exterior ▾');
+  sd.addEventListener('click',openSidePicker);
+  bar.appendChild(sd);
+  if(isInt()){
+    var fc=el('button','chip floorchip',j.floor+' ▾');
+    fc.addEventListener('click',openFloors);
+    bar.appendChild(fc);
+  }
   j.shapes.forEach(function(sh,i){
     /* a red rim means this outline is drawn but not yet placed */
     var untied=needsTie(j,i)&&!tieDone(sh)&&shapeSegs(sh)>0;
@@ -4249,7 +4617,7 @@ function drawShapeBar(){
     });
     bar.appendChild(c);
   });
-  var add=el('button','chip add','+ Outline');
+  var add=el('button','chip add',isInt()?'+ Room':'+ Outline');
   add.addEventListener('click',addShape);
   bar.appendChild(add);
 }
