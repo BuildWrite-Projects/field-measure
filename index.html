@@ -226,6 +226,12 @@ pre#sumtext{font-family:var(--num);font-size:12.5px;line-height:1.6;white-space:
   font-family:var(--display);font-size:14px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
 #findbtn small{display:block;font-family:var(--body);font-size:10.5px;letter-spacing:0;text-transform:none;font-weight:600;opacity:.9}
 #status.clear{color:var(--ok)}
+/* Exterior / Interior and ceiling-type choices: room inside the outline,
+   so the words don't sit hard against it */
+.jrow:has(.sidepick){border-bottom:none;padding:5px 0}
+.jopen.sidepick{padding:14px 16px;border-radius:12px;box-shadow:inset 0 0 0 1px var(--line)}
+.jopen.sidepick b{font-size:16px}
+.jopen.sidepick small{margin-top:5px;line-height:1.4;white-space:normal}
 .jopen.sidepick.on{box-shadow:inset 0 0 0 2px var(--accent)}
 .fitbtn{display:block;width:100%;margin:6px 0 8px;padding:10px;border-radius:9px;border:1.5px solid var(--accent);
   background:none;color:var(--accent);font-family:var(--display);font-size:14px;letter-spacing:.05em;text-transform:uppercase;font-weight:700}

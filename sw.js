@@ -1,4 +1,4 @@
-/* Field Measure — service worker.
+/* Field Measure â€” service worker.
  *
  * Its whole job is making the app open in a crawlspace with no signal. It keeps a
  * copy of the app's own files and serves those first, checking for a newer version
@@ -7,7 +7,7 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v29';
+var VERSION = 'fm-v30';
 /* fm-v29: auto-fit to measurements (interior) */
 var CORE = [
   './',
