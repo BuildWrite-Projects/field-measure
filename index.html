@@ -1909,6 +1909,18 @@ function tap(p){
       var F=W2S(S.pts[0]);
       if(Math.hypot(p.x-F.x,p.y-F.y)<34){closeShape();return;}
     }
+    /* a tap on a corner already placed is not a new corner (zoomed in, it's
+       easy to hit one); a duplicate there folded the room back on itself */
+    if(isInt()){
+      for(var ci2=1;ci2<S.pts.length;ci2++){
+        var CP=W2S(S.pts[ci2]);
+        if(Math.hypot(p.x-CP.x,p.y-CP.y)<22){
+          FMLog.add('sameCorner',{corner:ci2});
+          say('That corner’s already placed. Tap the orange 1 to finish, or Close shape.');
+          render();return;
+        }
+      }
+    }
     snapshot();
     /* the second corner shows which way the first wall runs: move the first
        corner to whichever spot by that room's corner keeps the wall straight */
@@ -2422,7 +2434,20 @@ function closeShape(){
     if(Math.abs(L.x-F.x)>2&&Math.abs(L.y-F.y)>2){
       /* last leg isn't square to the first corner — add the corner it implies */
       var lastWasHorizontal=Math.abs(L.x-P.x)>=Math.abs(L.y-P.y);
-      S.pts.push(lastWasHorizontal?{x:L.x,y:F.y}:{x:F.x,y:L.y});
+      var Ka=lastWasHorizontal?{x:L.x,y:F.y}:{x:F.x,y:L.y},Kb=lastWasHorizontal?{x:F.x,y:L.y}:{x:L.x,y:F.y};
+      var K=Ka;
+      if(isInt()){
+        /* inside: not on top of a corner already there, not doubling back
+           along the last wall, not through a room */
+        var bad=function(Kc){
+          if(S.pts.some(function(q){return Math.hypot(q.x-Kc.x,q.y-Kc.y)<0.75;}))return true;
+          var ux=L.x-P.x,uy=L.y-P.y,vx=Kc.x-L.x,vy=Kc.y-L.y;
+          if(Math.abs(ux*vy-uy*vx)<0.5*Math.hypot(vx,vy)&&ux*vx+uy*vy<0)return true;
+          return !!(crossesRing(L,Kc)||crossesRing(Kc,F));
+        };
+        if(bad(Ka)&&!bad(Kb))K=Kb;
+      }
+      S.pts.push(K);
     }
   }
   S.closed=true; render();

@@ -7,7 +7,7 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v26';
+var VERSION = 'fm-v27';
 var CORE = [
   './',
   'index.html',
