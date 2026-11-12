@@ -1062,6 +1062,8 @@ function paint(){
   /* Pinched right out, even the gap markers go and it's bare lines. */
   var bare=V.s<=MINZ*1.03;
   var n=segCount();
+  /* walls the measurements already pin down draw as done, with their length */
+  var woP={};try{woP=isInt()?workedOut():{};}catch(e){}
   ctx.lineCap='round';ctx.lineJoin='round';
   /* "You are here": a wide glow under the wall last measured or being
      measured, so after shooting it with the Disto you can see which one. */
@@ -1072,7 +1074,7 @@ function paint(){
     ctx.beginPath();ctx.moveTo(HA.x,HA.y);ctx.lineTo(HB.x,HB.y);ctx.stroke();ctx.restore();
   }
   for(var i=0;i<n;i++){
-    var s=seg(i),has=!!wallLen(i),A=W2S(s[0]),B=W2S(s[1]);
+    var s=seg(i),has=!!(wallLen(i)||woP[i]),A=W2S(s[0]),B=W2S(s[1]);
     ctx.strokeStyle=has?C.ok:C.miss;ctx.lineWidth=Math.max(2.2,4*hs);
     ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.stroke();
   }
@@ -1107,7 +1109,7 @@ function paint(){
   ctx.textAlign='center';ctx.textBaseline='middle';
   for(var j=0;j<n;j++){
     var s2=seg(j),A2=W2S(s2[0]),B2=W2S(s2[1]),mx=(A2.x+B2.x)/2,my=(A2.y+B2.y)/2;
-    var L=showLen(wallLen(j));
+    var L=showLen(wallLen(j))||(woP[j]?fmt16(Math.round(woP[j]*16)):'');
     if(L){
       if(hideNums)continue;
       ctx.font='600 12.5px "IBM Plex Mono",monospace';
@@ -1498,15 +1500,8 @@ function fitRoom(auto){
   }
   /* whole runs measured straight across a jog: each is one more total the
      walls along that line have to add up to */
-  var runRows=[];
-  for(i=0;i<n;i++){
-    var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len)continue;
-    var sp0=runSpan(i);if(!sp0||sp0.from!==i||sp0.to!==wr.to)continue;
-    var R16=dim16(wr.len);if(!R16)continue;
-    var ud=dirs[i],coef=new Array(n).fill(0);
-    for(var m3=i;;m3=(m3+1)%n){coef[m3]=dirs[m3].x*ud.x+dirs[m3].y*ud.y;if(m3===wr.to)break;}
-    runRows.push({coef:coef,target:R16/16});anyMeas=true;
-  }
+  var runRows=runRowsFor(dirs);
+  if(runRows.some(function(r){return r.run;}))anyMeas=true;
   if(!anyMeas){if(!auto){say('Measure at least one wall first.');render();}return null;}
   /* how far the walls, at these lengths, miss closing */
   var ex=0,ey=0;for(i=0;i<n;i++){ex+=dirs[i].x*L0[i];ey+=dirs[i].y*L0[i];}
@@ -1522,15 +1517,20 @@ function fitRoom(auto){
     var R=rows.length,M=[],bb=[];
     for(var p=0;p<R;p++){M.push([]);bb.push(rows[p].b);
       for(var q=0;q<R;q++){var s2=0;for(var k=0;k<n;k++)s2+=rows[p].coef[k]*wt[k]*rows[q].coef[k];M[p].push(s2);}}
-    /* Gaussian elimination */
+    /* Gaussian elimination. A row that repeats what others already say
+       (two straight lines that come to the same thing) is set aside; one
+       that contradicts them makes the fit fail, as before. */
+    var used=[],lamIdx=[];
     for(var c=0;c<R;c++){
-      var piv=c;for(var r2=c+1;r2<R;r2++)if(Math.abs(M[r2][c])>Math.abs(M[piv][c]))piv=r2;
-      if(Math.abs(M[piv][c])<1e-9)return null;
-      var tmp=M[c];M[c]=M[piv];M[piv]=tmp;var tb=bb[c];bb[c]=bb[piv];bb[piv]=tb;
-      for(r2=0;r2<R;r2++){if(r2===c)continue;var f=M[r2][c]/M[c][c];
-        for(var c2=c;c2<R;c2++)M[r2][c2]-=f*M[c][c2];bb[r2]-=f*bb[c];}
+      var piv=-1,best=1e-9;
+      for(var r2=0;r2<R;r2++){if(used[r2])continue;if(Math.abs(M[r2][c])>best){best=Math.abs(M[r2][c]);piv=r2;}}
+      if(piv<0){lamIdx[c]=-1;continue;}
+      used[piv]=true;lamIdx[c]=piv;
+      for(r2=0;r2<R;r2++){if(r2===piv)continue;var f=M[r2][c]/M[piv][c];if(!f)continue;
+        for(var c2=0;c2<R;c2++)M[r2][c2]-=f*M[piv][c2];bb[r2]-=f*bb[piv];}
     }
-    var lam=bb.map(function(x,p){return x/M[p][p];});
+    for(var r3=0;r3<R;r3++)if(!used[r3]&&Math.abs(bb[r3])>1e-6)return null;
+    var lam=[];for(c=0;c<R;c++)lam.push(lamIdx[c]>=0?bb[lamIdx[c]]/M[lamIdx[c]][c]:0);
     var out=[];for(var k=0;k<n;k++){var s3=0;for(p=0;p<R;p++)s3+=rows[p].coef[k]*lam[p];out.push(wt[k]*s3);}
     return out;
   }
@@ -3396,6 +3396,108 @@ function runSpan(i){
   var A=seg(from)[0],B=seg(to)[1];
   return{from:from,to:to,drawn:Math.abs((B.x-A.x)*d.x+(B.y-A.y)*d.y)};
 }
+function shoelace(P){var a=0;for(var i=0;i<P.length;i++){var p=P[i],q=P[(i+1)%P.length];a+=p.x*q.y-q.x*p.y;}return a/2;}
+/* Each wall's direction, squared to the nearest 45 (as auto-fit uses them). */
+function roomDirs(){
+  var n=segCount(),out=[];
+  for(var i=0;i<n;i++){
+    var s=seg(i),a=Math.round(Math.atan2(s[1].y-s[0].y,s[1].x-s[0].x)/(Math.PI/4))*(Math.PI/4);
+    out.push({x:Math.round(Math.cos(a)*1e9)/1e9,y:Math.round(Math.sin(a)*1e9)/1e9});
+  }
+  return out;
+}
+/* The extra totals a room's measured whole runs add: the pieces along the
+   line add up to the run; and where the jog is a simple three-wall bump
+   (side, face, side) its two sides are the same depth. */
+function runRowsFor(dirs){
+  var n=dirs.length,rows=[];
+  for(var i=0;i<n;i++){
+    var sp=runSpan(i);if(!sp||sp.from!==i)continue;
+    var ud=dirs[i],pp={x:-ud.y,y:ud.x};
+    /* a straight wall broken by a jog stays straight: the walls between
+       come back to the same line (so a dormer's two sides stay equal) */
+    /* only for a real bump-out (a dormer, a nook): the walls between enclose
+       a small part of the room. A line across the room's middle (dormer to
+       dormer) is still a fair thing to measure, but not a reason to force
+       the two ends level with each other. */
+    var jp=[];for(var mj=(i+1)%n;;mj=(mj+1)%n){jp.push(S.pts[mj]);if(mj===sp.to)break;}
+    var jogA=Math.abs(shoelace(jp)),roomA=Math.abs(shoelace(S.pts));
+    if(jogA<0.2*roomA){
+      var cs=new Array(n).fill(0);
+      for(var m0=i;;m0=(m0+1)%n){cs[m0]=dirs[m0].x*pp.x+dirs[m0].y*pp.y;if(m0===sp.to)break;}
+      rows.push({coef:cs,target:0,straight:true});
+    }
+    var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len||wr.to!==sp.to)continue;
+    var R16=dim16(wr.len);if(!R16)continue;
+    var coef=new Array(n).fill(0);
+    for(var m=i;;m=(m+1)%n){coef[m]=dirs[m].x*ud.x+dirs[m].y*ud.y;if(m===wr.to)break;}
+    rows.push({coef:coef,target:R16/16,run:true});
+  }
+  return rows;
+}
+/* Walls with no length yet that the measurements already pin down: the room
+   has to close, and every measured whole run has to add up. Each comes
+   back with the length it has to be (inches). */
+function workedOut(){
+  var n=segCount(),out={};
+  if(!isInt()||!S.closed||n<3)return out;
+  var dirs=roomDirs(),U=[],known={};
+  for(var i=0;i<n;i++){var m=dim16(wallLen(i));if(m)known[i]=m/16;else U.push(i);}
+  if(!U.length)return out;
+  var rows=[{coef:dirs.map(function(d){return d.x;}),target:0},{coef:dirs.map(function(d){return d.y;}),target:0}].concat(runRowsFor(dirs));
+  /* nothing measured at all: nothing is worked out */
+  if(!Object.keys(known).length&&!rows.some(function(r){return r.run;}))return out;
+  var A=rows.map(function(r){
+    var rhs=r.target;for(var k in known)rhs-=r.coef[k]*known[k];
+    return U.map(function(u){return r.coef[u];}).concat([rhs]);
+  });
+  var R=A.length,C=U.length,piv=[],row=0;
+  for(var c=0;c<C&&row<R;c++){
+    var p=row;for(var r=row+1;r<R;r++)if(Math.abs(A[r][c])>Math.abs(A[p][c]))p=r;
+    if(Math.abs(A[p][c])<1e-9)continue;
+    var t=A[row];A[row]=A[p];A[p]=t;
+    var pv=A[row][c];for(var c2=0;c2<=C;c2++)A[row][c2]/=pv;
+    for(r=0;r<R;r++){if(r===row)continue;var f=A[r][c];if(!f)continue;for(c2=0;c2<=C;c2++)A[r][c2]-=f*A[row][c2];}
+    piv.push(c);row++;
+  }
+  var pivSet={};piv.forEach(function(c,k){pivSet[c]=k;});
+  piv.forEach(function(c,k){
+    for(var c3=0;c3<C;c3++)if(!(c3 in pivSet)&&Math.abs(A[k][c3])>1e-7)return;   /* leans on a free wall */
+    var v=A[k][C];
+    if(v>0.25)out[U[c]]=v;
+  });
+  return out;
+}
+/* The next wall worth shooting from wall `from`: never one already measured
+   or worked out. Where a whole run is measured, its jog comes first, in
+   the order that pins it fastest: the face (the piece missing from the run),
+   then a side (the depth), then where it starts. Otherwise round the room. */
+function nextBlankWall(from,dir){
+  var n=segCount();if(!n)return -1;
+  dir=dir||1;
+  var wo=isInt()?workedOut():{},pri={};
+  if(isInt()){
+    var dirs=roomDirs();
+    for(var i=0;i<n;i++){
+      var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len)continue;
+      var sp=runSpan(i);if(!sp||sp.from!==i||sp.to!==wr.to)continue;
+      var ud=dirs[i];
+      for(var m=(i+1)%n;m!==wr.to;m=(m+1)%n){
+        var dt=Math.abs(dirs[m].x*ud.x+dirs[m].y*ud.y);
+        var p=dt>0.99?1:2;if(!(m in pri)||pri[m]>p)pri[m]=p;
+      }
+      if(!(i in pri))pri[i]=3;if(!(wr.to in pri))pri[wr.to]=3;
+    }
+  }
+  var best=-1,bk=1e9;
+  for(var st=1;st<=n;st++){
+    var k=(((from+dir*st)%n)+n)%n;
+    if(wallLen(k)||wo[k])continue;
+    var key=(pri[k]||9)*1000+st;
+    if(key<bk){bk=key;best=k;}
+  }
+  return best;
+}
 function runOf(sp){var w=S.walls[sp.from];return(w&&w.run&&w.run.to===sp.to)?w.run.len:'';}
 function setRun(sp,v){
   if(!S.walls[sp.from])S.walls[sp.from]={};
@@ -3456,11 +3558,8 @@ function selectWall(i,pan){
 /* After a wall gets its length, move on to the next blank one round the
    house (the way the ↺ button says). Nothing blank: stay put and say so. */
 function selectNextWall(from){
-  var n=segCount();
-  for(var step=1;step<=n;step++){
-    var k=(((from+nextDir*step)%n)+n)%n;
-    if(!wallLen(k)){selectWall(k,true);return true;}
-  }
+  var k=nextBlankWall(from,nextDir);
+  if(k>=0){selectWall(k,true);return true;}
   /* all done: let go of the last wall so nothing still looks like it needs
      attention */
   lastWall=-1;flashAt=null;
@@ -3837,8 +3936,10 @@ function blanks(){
     if(needsTie(j,si)&&!tieDone(sh))
       ties.push({shape:si,kind:'tie',
         label:'where '+sh.name+' sits relative to '+((j.shapes[0]&&j.shapes[0].name)||'the house')});
+    /* inside, a wall the measurements already pin down isn't missing */
+    var woB=(isInt()&&m)?withShape(sh,workedOut):{};
     for(var q=0;q<m;q++)
-      if(!(sh.walls&&sh.walls[q]&&sh.walls[q].len))
+      if(!(sh.walls&&sh.walls[q]&&sh.walls[q].len)&&!woB[q])
         walls.push({shape:si,kind:'wall',idx:q,label:sh.name+' wall '+(q+1)});
     /* inside, a drawn room with no finished ceiling is a blank too */
     if(isInt()&&m&&!ceilDone(sh))
@@ -3910,13 +4011,12 @@ function goToBlank(){
   if(!list.length)return;
   /* Walls on the outline you're looking at come first, walked round the
      perimeter from wherever you last were — not from a fixed starting corner. */
-  var n=segCount(),anyBlankWall=false;
-  for(var q=0;q<n;q++)if(!wallLen(q)){anyBlankWall=true;break;}
-  if(anyBlankWall){
-    var start=(lastWall>=0&&lastWall<n)?lastWall:(nextDir>0?-1:n);
-    for(var step=1;step<=n;step++){
-      var k=(((start+nextDir*step)%n)+n)%n;
-      if(wallLen(k))continue;
+  var n=segCount();
+  var start=(lastWall>=0&&lastWall<n)?lastWall:(nextDir>0?-1:n);
+  var kNext=nextBlankWall(start,nextDir);
+  if(kNext>=0){
+    for(var step=0;step<1;step++){
+      var k=kNext;
       /* select it and point the beacon at it; a second tap on the wall
          (or a Disto reading) fills it in */
       var sg=seg(k);
@@ -4540,7 +4640,9 @@ function render(){
   var n=segCount();
   if(S.tab==='walls'){
     var done=0;for(var i=0;i<n;i++)if(wallLen(i))done++;
-    var t=el('div','tally'+(n&&done===n?' done':''),n?done+' of '+n+' walls measured'+(done===n?'  ✓':''):'No walls yet');
+    var woT=isInt()?workedOut():{},nWo=Object.keys(woT).length;
+    var t=el('div','tally'+(n&&done+nWo===n?' done':''),n?(done+' of '+n+' walls measured'+(nWo?', '+nWo+' worked out':'')+
+      (done+nWo===n?'  ✓':'')):'No walls yet');
     view.appendChild(t);
     /* inside, on the new scale: each saved length reshapes the room. The
        switch is per floor, a way out if it ever misbehaves on site. */
@@ -4575,8 +4677,11 @@ function render(){
     if(!n){view.appendChild(el('div','empty-state','Switch to Draw and tap the corners of the house as you walk the perimeter. Tap the orange marker on your first corner to close the shape.'));}
     for(var j=0;j<n;j++){(function(j){
       var cnt=S.openings.filter(function(o){return o.wall===j;}).length;
-      view.appendChild(rowBtn('Wall '+(j+1),cnt?(cnt+' opening'+(cnt>1?'s':'')):null,
-        showLen(wallLen(j)),function(){askLength(j);}));
+      var wv=woT[j];
+      var rb=rowBtn('Wall '+(j+1),wv&&!wallLen(j)?'worked out — tap to shoot it anyway':(cnt?(cnt+' opening'+(cnt>1?'s':'')):null),
+        wallLen(j)?showLen(wallLen(j)):(wv?fmt16(Math.round(wv*16)):''),function(){askLength(j);});
+      if(wv&&!wallLen(j)){var vv=rb.querySelector('.val');if(vv){vv.className='val';vv.style.color='var(--ink-2)';vv.style.fontWeight='500';}}
+      view.appendChild(rb);
     })(j);}
     /* straight runs broken by a jog, each measurable in one shot */
     if(isInt()&&S.closed){
