@@ -110,10 +110,12 @@ header h1{font-family:var(--display);font-size:21px;letter-spacing:.06em;text-tr
 /* The hint bar carries the snap setting as well as the hint text. It lives
    above the drawing rather than on top of it, so the chip is reachable in
    every mode and costs no drawing surface. */
-#hint{flex:0 0 auto;display:flex;align-items:center;gap:10px;
+/* A fixed height: when a message ran from one line to three the drawing
+   below it jumped up and down with it. Three lines always, clipped past that. */
+#hint{flex:0 0 auto;display:flex;align-items:center;gap:10px;box-sizing:border-box;height:62px;
   background:var(--surface-2);color:var(--ink-2);font-size:12px;line-height:1.35;
   padding:6px 10px 6px 16px;border-bottom:1px solid var(--line)}
-#hinttext{flex:1 1 auto;min-width:0}
+#hinttext{flex:1 1 auto;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 #hint #snap{flex:0 0 auto;padding:5px 12px;font-size:12.5px}
 /* plain chip would be the same colour as the bar it sits in */
 #hint #snap:not(.on){background:var(--surface)}
@@ -880,9 +882,14 @@ function applyGaps(w){
 /* ---------- canvas ---------- */
 var cv=document.getElementById('c'),ctx=cv.getContext('2d'),W=0,H=0;
 function cssvar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+var cvTop=null;
 function fit(){
   var r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
   if(!r.width||!r.height)return;
+  /* if the box moved down or up on the page (something above it changed
+     height), shift the view the other way so the drawing stays put */
+  if(cvTop!==null&&Math.abs(r.top-cvTop)>=1)V.oy+=cvTop-r.top;
+  cvTop=r.top;
   if(Math.abs(r.width-W)<1&&Math.abs(r.height-H)<1){paint();return;}
   W=r.width;H=r.height;
   cv.width=Math.round(W*d);cv.height=Math.round(H*d);
@@ -1201,7 +1208,7 @@ function roomSnap(q,screenP){
       var endAt=null;
       if(Math.hypot(screenP.x-a.x,screenP.y-a.y)<34)endAt=A;
       else if(Math.hypot(screenP.x-b.x,screenP.y-b.y)<34)endAt=B;
-      bd=d;best={A:A,ux:wx/wl,uy:wy/wl,nx:nx,ny:ny,t:tW,room:sh.name,endAt:endAt};
+      bd=d;best={A:A,ux:wx/wl,uy:wy/wl,nx:nx,ny:ny,t:tW,room:sh.name,endAt:endAt,key:si+':'+i};
     }
   });
   if(!best)return null;
@@ -1209,9 +1216,9 @@ function roomSnap(q,screenP){
   var off=(q.x-best.A.x)*best.nx+(q.y-best.A.y)*best.ny-best.t;
   if(!S.pts.length&&best.endAt){
     /* first corner by that wall's end: right at the end, a wall's thickness out */
-    return{pt:{x:Math.round(best.endAt.x+best.nx*best.t),y:Math.round(best.endAt.y+best.ny*best.t)},room:best.room};
+    return{pt:{x:Math.round(best.endAt.x+best.nx*best.t),y:Math.round(best.endAt.y+best.ny*best.t)},room:best.room,key:best.key};
   }
-  return{pt:{x:Math.round(q.x-best.nx*off),y:Math.round(q.y-best.ny*off)},room:best.room};
+  return{pt:{x:Math.round(q.x-best.nx*off),y:Math.round(q.y-best.ny*off)},room:best.room,key:best.key};
 }
 function hitWall(p){
   var n=segCount(),best=-1,bt=0,bd=28;
@@ -1556,13 +1563,25 @@ function tap(p){
     if(S.closed){clearPicks();return;}
     if(S.pts.length>2){
       var F=W2S(S.pts[0]);
-      if(Math.hypot(p.x-F.x,p.y-F.y)<24){closeShape();return;}
+      if(Math.hypot(p.x-F.x,p.y-F.y)<34){closeShape();return;}
     }
     snapshot();
     var np=snapPoint(S2W(p));
     if(isInt()){
-      var rs=roomSnap(np,p);
-      if(rs){np=rs.pt;if(S.pts.length===0)say('Started against '+rs.room+' — one wall’s thickness out from it. Now tap each corner as you walk the room.');}
+      var rs=roomSnap(np,p),shc=curShape();
+      if(rs){
+        np=rs.pt;
+        if(S.pts.length===0){
+          shc.startWall=rs.key;
+          say('Started against '+rs.room+' — one wall’s thickness out from it. Now tap each corner as you walk the room.');
+        }else if(S.pts.length>=3&&shc.startWall===rs.key){
+          /* back on the wall you started against: the last wall runs along it
+             to the first corner, so the room is finished */
+          S.pts.push(np);closeShape();
+          say('Closed along '+rs.room+'’s wall.');
+          render();return;
+        }
+      }
     }
     S.pts.push(np);
     render();
@@ -1595,7 +1614,7 @@ function tap(p){
     askOpening(S.openings.length-1,true);
   }
 }
-var ptrs={},startPt=null,moved=false,pinchD=0,pinchMid=null,dragIdx=-1,dragLive=false,dragBase=null,weldTo=-1;
+var ptrs={},startPt=null,moved=false,pinchD=0,pinchMid=null,dragIdx=-1,dragLive=false,dragBase=null,weldTo=-1,dragAt=null;
 var grpIdx=-1,grpLive=false,grpBase=null,grpLock=null;
 var jogOn=false,jogDir=1,cutOn=false,cutPicks=[],eraseOn=false;
 var toolMsg='',toolMsgTimer=null;
@@ -1916,7 +1935,8 @@ cv.addEventListener('pointermove',function(e){
         dragLive=true;
       }
       var rr=cv.getBoundingClientRect();
-      moveCorner(dragBase,dragIdx,S2W({x:e.clientX-rr.left,y:e.clientY-rr.top}));
+      dragAt={x:e.clientX-rr.left,y:e.clientY-rr.top};   /* where the finger is */
+      moveCorner(dragBase,dragIdx,S2W(dragAt));
       weldTo=mergeTarget(dragIdx);
       paint();
     }else{V.ox+=e.clientX-prev.x;V.oy+=e.clientY-prev.y;paint();}
@@ -1940,10 +1960,23 @@ function endPtr(e){
     tap({x:startPt.x-r.left,y:startPt.y-r.top});
   }else if(single&&grpLive){grpLive=false;render();}
   else if(single&&dragLive){
-    if(weldTo>=0&&dragIdx>=0)mergeCorners(dragIdx,weldTo);
+    /* an open shape: dragging its last corner onto its first (or the first
+       onto the last) means "close it" — put the corners back where they were
+       and close, rather than moving a corner off its place */
+    var nP=S.pts.length,closeIt=false;
+    if(!S.closed&&nP>=3&&dragBase&&dragBase.length===nP&&(dragIdx===nP-1||dragIdx===0)){
+      /* judged by where the finger let go: the corner itself may refuse to
+         sit on top of another one */
+      var other=dragIdx===0?nP-1:0,a2=dragAt||W2S(S.pts[dragIdx]),b2=W2S(dragBase[other]);
+      if(Math.hypot(a2.x-b2.x,a2.y-b2.y)<34)closeIt=true;
+    }
+    if(closeIt){
+      dragBase.forEach(function(q,i){S.pts[i].x=q.x;S.pts[i].y=q.y;});
+      closeShape();
+    }else if(weldTo>=0&&dragIdx>=0)mergeCorners(dragIdx,weldTo);
     weldTo=-1;render();
   }
-  if(!ids().length){startPt=null;moved=false;pinchD=0;pinchMid=null;dragIdx=-1;dragLive=false;dragBase=null;weldTo=-1;grpIdx=-1;grpLive=false;grpBase=null;grpLock=null;save();}
+  if(!ids().length){startPt=null;moved=false;pinchD=0;pinchMid=null;dragIdx=-1;dragLive=false;dragBase=null;dragAt=null;weldTo=-1;grpIdx=-1;grpLive=false;grpBase=null;grpLock=null;save();}
 }
 cv.addEventListener('pointerup',endPtr);
 cv.addEventListener('pointercancel',endPtr);
@@ -4080,7 +4113,7 @@ function hintText(){
   if(S.mode==='measure')return 'Tap a wall for its length, or a corner for its grade \u2014 how far the dirt sits below the top of the foundation. Drag a corner to stretch it.';
   if(S.mode==='draw'&&isInt()&&!S.pts.length)
     return cur().shapes.length>1
-      ? 'Start '+curShape().name+' next to a room you\u2019ve drawn: tap just outside its wall and it starts one wall-thickness away. Then tap each corner as you walk.'
+      ? 'Start '+curShape().name+' against a room you\u2019ve drawn: tap just outside its wall. Then tap each corner as you walk.'
       : 'Tap each corner of '+curShape().name+' as you walk it. Tap the orange first corner to close it.';
   if(S.mode==='open')return 'Tap a wall where a window or door sits to add one. Tap an opening already there to edit or remove it.';
   if(S.snap===90)return 'Tap to place a corner. Drag one onto its neighbour to join them. Drag anywhere else to move the paper.';
