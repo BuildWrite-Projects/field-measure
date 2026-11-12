@@ -28,7 +28,7 @@
   --bg:#f1f3f2; --surface:#ffffff; --surface-2:#e9ecea;
   --ink:#15181b; --ink-2:#5b6670; --line:#d3d9d6;
   --accent:#ff5a1f; --accent-ink:#ffffff;
-  --ok:#1b7a4c; --miss:#c42b1c; --grid:#e3e8e5;
+  --ok:#1b7a4c; --miss:#c42b1c; --part:#c99700; --grid:#e3e8e5;
   --display:"Barlow Condensed",'Arial Narrow',sans-serif;
   --body:"IBM Plex Sans",system-ui,sans-serif;
   --num:"IBM Plex Mono",ui-monospace,monospace;
@@ -37,14 +37,14 @@
   --bg:#13161a; --surface:#1c2126; --surface-2:#262c33;
   --ink:#edf1f3; --ink-2:#95a1aa; --line:#2d353d;
   --accent:#ff7a45; --accent-ink:#1a0d06;
-  --ok:#49bd82; --miss:#ff6d5c; --grid:#242b31;
+  --ok:#49bd82; --miss:#ff6d5c; --part:#f2c230; --grid:#242b31;
   color-scheme:dark;
 }}
 :root[data-theme="dark"]{
   --bg:#13161a; --surface:#1c2126; --surface-2:#262c33;
   --ink:#edf1f3; --ink-2:#95a1aa; --line:#2d353d;
   --accent:#ff7a45; --accent-ink:#1a0d06;
-  --ok:#49bd82; --miss:#ff6d5c; --grid:#242b31;
+  --ok:#49bd82; --miss:#ff6d5c; --part:#f2c230; --grid:#242b31;
   color-scheme:dark;
 }
 /* touch-action:manipulation is what stops iOS double-tap from zooming the
@@ -1004,7 +1004,7 @@ function rr(x,y,w,h,r){
 }
 function paint(){
   if(!W)return;
-  var C={grid:cssvar('--grid'),ink:cssvar('--ink'),ink2:cssvar('--ink-2'),ok:cssvar('--ok'),miss:cssvar('--miss'),acc:cssvar('--accent'),surf:cssvar('--surface')};
+  var C={grid:cssvar('--grid'),ink:cssvar('--ink'),ink2:cssvar('--ink-2'),ok:cssvar('--ok'),miss:cssvar('--miss'),part:cssvar('--part'),acc:cssvar('--accent'),surf:cssvar('--surface')};
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle=C.surf;ctx.fillRect(0,0,W,H);
   ctx.strokeStyle=C.grid;ctx.lineWidth=1;
@@ -1072,6 +1072,8 @@ function paint(){
   var n=segCount();
   /* walls the measurements already pin down draw as done, with their length */
   var woP={};try{woP=isInt()?workedOut():{};}catch(e){}
+  /* yellow: on a run that's been shot, but still waiting on another wall */
+  var cvP={};try{cvP=isInt()?runCovered(woP):{};}catch(e){}
   ctx.lineCap='round';ctx.lineJoin='round';
   /* "You are here": a wide glow under the wall last measured or being
      measured, so after shooting it with the Disto you can see which one. */
@@ -1091,7 +1093,7 @@ function paint(){
   }
   for(var i=0;i<n;i++){
     var s=seg(i),has=!!(wallLen(i)||woP[i]),A=W2S(s[0]),B=W2S(s[1]);
-    ctx.strokeStyle=has?C.ok:C.miss;ctx.lineWidth=Math.max(2.2,4*hs);
+    ctx.strokeStyle=has?C.ok:(cvP[i]?C.part:C.miss);ctx.lineWidth=Math.max(2.2,4*hs);
     ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.stroke();
   }
   /* openings sit on their wall */
@@ -1141,9 +1143,10 @@ function paint(){
         var wl=String(j+1),here=(selOn&&j===lastWall),nh=Math.round(Math.max(15,20*hs));
         ctx.font='700 '+Math.round(Math.max(10,12*hs))+'px "IBM Plex Sans",sans-serif';
         var bw2=Math.max(nh,ctx.measureText(wl).width+10);
-        ctx.fillStyle=here?C.acc:C.surf;ctx.strokeStyle=here?C.acc:C.miss;ctx.lineWidth=1.8;
+        var cl=cvP[j]?C.part:C.miss;
+        ctx.fillStyle=here?C.acc:C.surf;ctx.strokeStyle=here?C.acc:cl;ctx.lineWidth=1.8;
         rr(mx-bw2/2,my-nh/2,bw2,nh,5);ctx.fill();ctx.stroke();
-        ctx.fillStyle=here?cssvar('--accent-ink'):C.miss;ctx.fillText(wl,mx,my+.5);
+        ctx.fillStyle=here?cssvar('--accent-ink'):cl;ctx.fillText(wl,mx,my+.5);
         continue;
       }
       var bs=Math.max(4.5,7.5*hs);
@@ -3275,18 +3278,10 @@ function distoDirect(raw){
   if(t<=0){say('Got a zero reading. Nothing was filled in.');render();return;}
   if(roomLockedNow()){say(curShape().name+' is locked (it’s finished). Hold its name and choose Unlock to change it.');render();return;}
   /* The selected wall sits on a straight run that hasn't been shot yet:
-     the reading could be the whole run or just this wall. Tell them apart
-     by size against the drawing; ask only when it's too close to call. */
+     the first shot on it is always the whole run, corner to corner past
+     the jog. Every shot after that is just the selected wall. */
   var spD=isInt()?runSpan(i):null;
-  if(spD&&!runOf(spD)){
-    var sgD=seg(i),wallDrawn=Math.hypot(sgD[1].x-sgD[0].x,sgD[1].y-sgD[0].y),r=t/16;
-    var sc=cur().inch?1:(floorScale()/16||1);              /* drawing units to inches */
-    var wD=wallDrawn*sc,rD=spD.drawn*sc;
-    var eW=Math.abs(r-wD)/(wD||1),eR=Math.abs(r-rD)/(rD||1);
-    var asRun=(eR<eW*0.6)?true:(eW<eR*0.6)?false:null;
-    if(asRun===null){askRunOrWall(i,spD,raw);return;}
-    if(asRun){distoRun(i,spD,t);return;}
-  }
+  if(spD&&!runOf(spD)){distoRun(i,spD,t);return;}
   distoDirectWall(i,t);
 }
 /* a Disto reading saved as the selected wall's own length */
@@ -3302,7 +3297,7 @@ function distoDirectWall(i,t){
     recordMeas(function(){setWallLen(i,prevVal);checkAutoUnlock();},i);
     setWallLen(i,txt);applyGaps(i);
   }
-  flag+=checkAutoLock();
+  flag+=jogCheck(i)+checkAutoLock();
   if(selectNextWall(i))say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+'. Now on wall '+(lastWall+1)+'.'+flag);
   else say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+'. Every wall has a length.'+flag);
   render();
@@ -3473,7 +3468,10 @@ function wallDir(i){var s=seg(i),dx=s[1].x-s[0].x,dy=s[1].y-s[0].y,l=Math.hypot(
 function sameLine(i,k){
   var a=wallDir(i),b=wallDir(k);
   if(a.x*b.x+a.y*b.y<0.999)return false;
-  return Math.abs((b.A.x-a.A.x)*(-a.y)+(b.A.y-a.A.y)*a.x)<0.5;
+  /* inside (drawn to the inch) a dormer a little out of square leaves the
+     far wall a fraction off the line: still the same run */
+  var tol=(isInt()&&cur().inch)?2:0.5;
+  return Math.abs((b.A.x-a.A.x)*(-a.y)+(b.A.y-a.A.y)*a.x)<tol;
 }
 function runSpan(i){
   var n=segCount();if(!S.closed||n<5)return null;
@@ -3497,7 +3495,7 @@ function roomDirs(){
 /* The extra totals a room's measured whole runs add: the pieces along the
    line add up to the run; and where the jog is a simple three-wall bump
    (side, face, side) its two sides are the same depth. */
-function runRowsFor(dirs){
+function runRowsFor(dirs,noStraight){
   var n=dirs.length,rows=[];
   for(var i=0;i<n;i++){
     var sp=runSpan(i);if(!sp||sp.from!==i)continue;
@@ -3510,10 +3508,16 @@ function runRowsFor(dirs){
        the two ends level with each other. */
     var jp=[];for(var mj=(i+1)%n;;mj=(mj+1)%n){jp.push(S.pts[mj]);if(mj===sp.to)break;}
     var jogA=Math.abs(shoelace(jp)),roomA=Math.abs(shoelace(S.pts));
-    if(jogA<0.2*roomA){
-      var cs=new Array(n).fill(0);
-      for(var m0=i;;m0=(m0+1)%n){cs[m0]=dirs[m0].x*pp.x+dirs[m0].y*pp.y;if(m0===sp.to)break;}
-      rows.push({coef:cs,target:0,straight:true});
+    if(!noStraight&&jogA<0.2*roomA){
+      var cs=new Array(n).fill(0),allSides=true;
+      for(var m0=i;;m0=(m0+1)%n){
+        cs[m0]=dirs[m0].x*pp.x+dirs[m0].y*pp.y;
+        if(Math.abs(cs[m0])>0.01&&!dim16(wallLen(m0)))allSides=false;
+        if(m0===sp.to)break;
+      }
+      /* Until both sides are shot, the drawing assumes the jog is square.
+         Once they are, the tape decides: a dormer out of square stays so. */
+      if(!allSides)rows.push({coef:cs,target:0,straight:true});
     }
     var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len||wr.to!==sp.to)continue;
     var R16=dim16(wr.len);if(!R16)continue;
@@ -3532,7 +3536,9 @@ function workedOut(){
   var dirs=roomDirs(),U=[],known={};
   for(var i=0;i<n;i++){var m=dim16(wallLen(i));if(m)known[i]=m/16;else U.push(i);}
   if(!U.length)return out;
-  var rows=[{coef:dirs.map(function(d){return d.x;}),target:0},{coef:dirs.map(function(d){return d.y;}),target:0}].concat(runRowsFor(dirs));
+  /* Only what the tape says counts here, never "the dormer is probably
+     square": so the far side of a jog still gets shot, as the check. */
+  var rows=[{coef:dirs.map(function(d){return d.x;}),target:0},{coef:dirs.map(function(d){return d.y;}),target:0}].concat(runRowsFor(dirs,true));
   /* nothing measured at all: nothing is worked out */
   if(!Object.keys(known).length&&!rows.some(function(r){return r.run;}))return out;
   var A=rows.map(function(r){
@@ -3556,35 +3562,56 @@ function workedOut(){
   });
   return out;
 }
-/* The next wall worth shooting from wall `from`: never one already measured
-   or worked out. Where a whole run is measured, its jog comes first, in
-   the order that pins it fastest: the face (the piece missing from the run),
-   then a side (the depth), then where it starts. Otherwise round the room. */
+/* The next wall worth shooting from wall `from`: simply the next one round
+   the room as you walk it, skipping any already measured or worked out.
+   Shoot the run first, then walk: the one wall left on the run's line
+   works itself out at the end. */
 function nextBlankWall(from,dir){
   var n=segCount();if(!n)return -1;
   dir=dir||1;
-  var wo=isInt()?workedOut():{},pri={};
-  if(isInt()){
-    var dirs=roomDirs();
-    for(var i=0;i<n;i++){
-      var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len)continue;
-      var sp=runSpan(i);if(!sp||sp.from!==i||sp.to!==wr.to)continue;
-      var ud=dirs[i];
-      for(var m=(i+1)%n;m!==wr.to;m=(m+1)%n){
-        var dt=Math.abs(dirs[m].x*ud.x+dirs[m].y*ud.y);
-        var p=dt>0.99?1:2;if(!(m in pri)||pri[m]>p)pri[m]=p;
-      }
-      if(!(i in pri))pri[i]=3;if(!(wr.to in pri))pri[wr.to]=3;
-    }
-  }
-  var best=-1,bk=1e9;
+  var wo=isInt()?workedOut():{};
   for(var st=1;st<=n;st++){
     var k=(((from+dir*st)%n)+n)%n;
     if(wallLen(k)||wo[k])continue;
-    var key=(pri[k]||9)*1000+st;
-    if(key<bk){bk=key;best=k;}
+    return k;
   }
-  return best;
+  return -1;
+}
+/* Yellow walls: on the line of a run that's been shot, with no length of
+   their own and not yet worked out. One more wall and they will be. */
+function runCovered(wo){
+  var n=segCount(),out={};if(!isInt()||!S.closed)return out;
+  wo=wo||workedOut();
+  for(var i=0;i<n;i++){
+    var wr=S.walls[i]&&S.walls[i].run;if(!wr||!wr.len)continue;
+    var sp=runSpan(i);if(!sp||sp.from!==i||sp.to!==wr.to)continue;
+    for(var m=i;;m=(m+1)%n){
+      if(sameLine(i,m)&&!wallLen(m)&&!wo[m])out[m]=1;
+      if(m===sp.to)break;
+    }
+  }
+  return out;
+}
+/* Both sides of a jog shot: do they agree? A note when the dormer is more
+   than 1/4" out of square, so it's a choice, not a surprise. */
+function jogCheck(i){
+  if(!isInt()||!S.closed)return '';
+  var n=segCount(),dirs=roomDirs(),msg='';
+  for(var f=0;f<n;f++){
+    var sp=runSpan(f);if(!sp||sp.from!==f)continue;
+    var inJog=false,ud=dirs[f],pp={x:-ud.y,y:ud.x},sum=0,all=true,sides=[];
+    for(var m=(f+1)%n;m!==sp.to;m=(m+1)%n){
+      if(m===i)inJog=true;
+      var c=dirs[m].x*pp.x+dirs[m].y*pp.y;if(Math.abs(c)<0.01)continue;
+      var L=dim16(wallLen(m));if(!L){all=false;break;}
+      sum+=c*L/16;sides.push(m+1);
+    }
+    if(!inJog||!all||sides.length<2)continue;
+    if(Math.abs(sum)>0.25)msg+=' Walls '+sides.join(' and ')+' differ by '+(function(d){return d<16?reduce16(d)+'"':fmtInches(d);})(Math.round(Math.abs(sum)*16))+
+      ' — out of square. Both lengths are kept; reshoot one if that’s a misread.';
+    else msg+=' Walls '+sides.join(' and ')+' agree — square.';
+  }
+  return msg;
 }
 function runOf(sp){var w=S.walls[sp.from];return(w&&w.run&&w.run.to===sp.to)?w.run.len:'';}
 function setRun(sp,v){
@@ -3618,14 +3645,14 @@ function askLength(i){
         var af=saveLenAuto(i,wv,sp,rv);
         recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();checkAutoUnlock();},prevLast);
         if(wv||rv)selectNextWall(i);
-        var lk=checkAutoLock();
+        var lk=(wv?jogCheck(i):'')+checkAutoLock();
         if((af.res&&af.res.msg)||lk)say((((af.res&&af.res.msg)||'')+lk).trim());
       }else{
         recordMeas(function(){setWallLen(i,prevVal);if(sp)setRun(sp,prevRun);checkAutoUnlock();},prevLast);
         setWallLen(i,wv);applyGaps(i);
         if(sp)setRun(sp,rv);
         if(wv||rv)selectNextWall(i);
-        var lk2=checkAutoLock();if(lk2)say(lk2.trim());
+        var lk2=(wv?jogCheck(i):'')+checkAutoLock();if(lk2)say(lk2.trim());
       }
       render();
     }});
@@ -4740,7 +4767,7 @@ function render(){
   var n=segCount();
   if(S.tab==='walls'){
     var done=0;for(var i=0;i<n;i++)if(wallLen(i))done++;
-    var woT=isInt()?workedOut():{},nWo=Object.keys(woT).length;
+    var woT=isInt()?workedOut():{},nWo=Object.keys(woT).length,cvT=isInt()?runCovered(woT):{};
     var t=el('div','tally'+(n&&done+nWo===n?' done':''),n?(done+' of '+n+' walls measured'+(nWo?', '+nWo+' worked out':'')+
       (done+nWo===n?'  ✓':'')):'No walls yet');
     view.appendChild(t);
@@ -4778,7 +4805,8 @@ function render(){
     for(var j=0;j<n;j++){(function(j){
       var cnt=S.openings.filter(function(o){return o.wall===j;}).length;
       var wv=woT[j];
-      var rb=rowBtn('Wall '+(j+1),wv&&!wallLen(j)?'worked out — tap to shoot it anyway':(cnt?(cnt+' opening'+(cnt>1?'s':'')):null),
+      var rb=rowBtn('Wall '+(j+1),wv&&!wallLen(j)?'worked out — tap to shoot it anyway':
+          (cvT[j]?'run shot — works out once the walls around it are in':(cnt?(cnt+' opening'+(cnt>1?'s':'')):null)),
         wallLen(j)?showLen(wallLen(j)):(wv?fmt16(Math.round(wv*16)):''),function(){askLength(j);});
       if(wv&&!wallLen(j)){var vv=rb.querySelector('.val');if(vv){vv.className='val';vv.style.color='var(--ink-2)';vv.style.fontWeight='500';}}
       view.appendChild(rb);
