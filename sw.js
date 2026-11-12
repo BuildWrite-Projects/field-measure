@@ -7,8 +7,8 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v28';
-/* fm-v28: interior corners carry the next room's wall line after a route */
+var VERSION = 'fm-v29';
+/* fm-v29: Fit drawing to measurements (interior) */
 var CORE = [
   './',
   'index.html',
