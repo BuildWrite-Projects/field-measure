@@ -55,14 +55,18 @@ html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);overflow:hidden}
 #app{display:flex;flex-direction:column;height:100%}
 
-header{background:var(--ink);color:var(--bg);display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex:0 0 auto;
+/* A fixed height, and a fixed-width save status: "saving" / "saved" flipping
+   after every move used to rewrap the title onto one line or two, and the
+   whole screen below it jumped each time. */
+header{background:var(--ink);color:var(--bg);display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;
+  box-sizing:border-box;height:calc(66px + env(safe-area-inset-top,0px));overflow:hidden;
   /* Clear the notch and status bar when running from the home screen. On iOS the
      inset is zero in Safari, so this costs nothing there. */
   padding:calc(9px + env(safe-area-inset-top,0px)) 16px 9px}
-header h1{font-family:var(--display);font-size:21px;letter-spacing:.06em;text-transform:uppercase;margin:0;font-weight:700}
-#hdr{display:flex;align-items:center;gap:8px;min-width:0}
+header h1{font-family:var(--display);font-size:21px;line-height:1.05;letter-spacing:.06em;text-transform:uppercase;margin:0;font-weight:700;min-width:0}
+#hdr{display:flex;align-items:center;gap:8px;min-width:0;flex:0 0 auto}
 #sync{font-family:var(--body);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
-  color:var(--bg);opacity:.6;white-space:nowrap}
+  color:var(--bg);opacity:.6;white-space:nowrap;display:inline-block;width:6.2em;text-align:right;overflow:hidden;text-overflow:ellipsis}
 #sync.ok{opacity:.75}
 #sync.warn{opacity:1;color:#ffd4c2}
 #jobbtn{font-family:var(--body);font-size:12px;color:var(--bg);background:none;border:1px solid currentColor;
@@ -638,7 +642,7 @@ migrateAll(DB);   /* rename old height keys before anything reads them */
 function logOut(o){ try{ console.log('[FM]',o); }catch(e){} }
 function setSync(mode){
   var e=document.getElementById('sync');if(!e)return;
-  var txt={connecting:'syncing',saving:'saving',ok:'saved',local:'this device only',err:'not saved'}[mode]||'';
+  var txt={connecting:'syncing',saving:'saving',ok:'saved',local:'phone only',err:'not saved'}[mode]||'';
   e.textContent=txt;
   e.className=(mode==='ok')?'ok':((mode==='local'||mode==='err')?'warn':'');
 }
@@ -1262,6 +1266,33 @@ function roomSnap(q,screenP,vR,eR){
   }
   return null;
 }
+/* L is the last corner, q0 where the corner was going before any snap (so on
+   the line being walked), P where it ended up. If L->P isn't square (or a
+   45 on that setting), return the corner to add between them: straight on
+   from L along the line you were walking, then a turn to P. */
+function squareTurn(L,q0,P){
+  var step=(S.snap===45)?Math.PI/4:Math.PI/2;
+  function onGrid(a,b){
+    var dx=b.x-a.x,dy=b.y-a.y;if(Math.hypot(dx,dy)<0.75)return true;
+    var ang=Math.atan2(dy,dx),k=Math.round(ang/step)*step;
+    return Math.abs(Math.sin(ang-k))*Math.hypot(dx,dy)<0.75;
+  }
+  if(onGrid(L,P))return null;
+  var dx=q0.x-L.x,dy=q0.y-L.y,dl=Math.hypot(dx,dy);
+  if(dl<0.75)return null;
+  var d={x:dx/dl,y:dy/dl},best=null,bd=1e9;
+  for(var k=0;k<8;k++){
+    if(step>Math.PI/4+1e-6&&k%2)continue;            /* 90 setting: square turns only */
+    var e={x:Math.cos(k*Math.PI/4),y:Math.sin(k*Math.PI/4)};
+    if(Math.abs(d.x*e.y-d.y*e.x)<1e-6)continue;       /* parallel: no corner */
+    var K=isect(L,d,P,e);if(!K)continue;
+    if((K.x-L.x)*d.x+(K.y-L.y)*d.y<0.75)continue;    /* must go on, not back */
+    var dd=Math.hypot(K.x-q0.x,K.y-q0.y);
+    if(dd<bd){bd=dd;best=K;}
+  }
+  if(!best)return null;
+  return{x:Math.round(best.x),y:Math.round(best.y)};
+}
 /* A corner that would land inside a room already drawn (or inside the wall
    around it) is pushed out onto the nearest edge of that room's ring. */
 function keepOutside(q){
@@ -1376,18 +1407,28 @@ function moveCorner(base,i,w){
   }
   if(bx!==null)C.x=bx;
   if(by!==null)C.y=by;
-  /* the two walls meeting here, at the angles they had before the drag */
-  var uPrev=pi>=0?dirOf(base[pi],cur):null;
-  var uNext=ni>=0?dirOf(cur,base[ni]):null;
+  /* the two walls meeting here, at the angles they had before the drag.
+     Inside, a wall that had come out slightly off is squared up to the
+     nearest 90 (or 45) as you drag, so dragging never leaves a skew. */
+  function qd(u){
+    if(!u||!isInt())return u;
+    var a=Math.round(Math.atan2(u.y,u.x)/(Math.PI/4))*(Math.PI/4);
+    if(S.snap===90){var a90=Math.round(Math.atan2(u.y,u.x)/(Math.PI/2))*(Math.PI/2);
+      /* keep a deliberate 45 (from the 45 cut) as it is */
+      if(Math.abs(Math.atan2(u.y,u.x)-a90)>0.3)return{x:Math.cos(a),y:Math.sin(a)};a=a90;}
+    return{x:Math.cos(a),y:Math.sin(a)};
+  }
+  var uPrev=pi>=0?qd(dirOf(base[pi],cur)):null;
+  var uNext=ni>=0?qd(dirOf(cur,base[ni])):null;
   var ppi=pi<0?-1:(pi>0?pi-1:(S.closed?n-1:-1));
   var nni=ni<0?-1:(ni<n-1?ni+1:(S.closed?0:-1));
   var nb=null,nd=null;
   if(pi>=0&&uPrev&&ppi>=0&&ppi!==i&&ppi!==ni){
-    var dA=dirOf(base[ppi],base[pi]);
+    var dA=qd(dirOf(base[ppi],base[pi]));
     if(dA)nb=isect(base[ppi],dA,C,uPrev);
   }
   if(ni>=0&&uNext&&nni>=0&&nni!==i&&nni!==pi){
-    var dE=dirOf(base[ni],base[nni]);
+    var dE=qd(dirOf(base[ni],base[nni]));
     if(dE)nd=isect(base[nni],dE,C,uNext);
   }
   /* refuse a move that would turn a wall inside out */
@@ -1630,10 +1671,17 @@ function tap(p){
     snapshot();
     var np=snapPoint(S2W(p));
     if(isInt()){
-      var shc=curShape(),how=roomSnap(np,p);
+      var shc=curShape(),q0=np,how=roomSnap(np,p);
       if(how)np=how.pt;
       var ko=keepOutside(np);
       if(ko){np=ko.pt;if(!how)how=ko;}
+      /* a snap can pull the corner sideways off the line you were walking.
+         Never draw that as a slanted wall: carry on straight and turn, square
+         (or at 45 on that setting), the way the room actually goes */
+      if(S.pts.length&&S.snap){
+        var K=squareTurn(S.pts[S.pts.length-1],q0,np);
+        if(K){S.pts.push(K);}
+      }
       if(how){
         if(S.pts.length===0){
           shc.startKeys=how.keys;
@@ -4697,6 +4745,22 @@ function openShapeMenu(sh,i){
   var rn=el('button','mbtn msecondary','Rename');
   rn.addEventListener('click',function(){openShapeName(sh);});
   mbox.appendChild(rn);
+  if(shapeSegs(sh)||(sh.pts&&sh.pts.length)){
+    var word2=isInt()?'room':'outline';
+    var so=el('button','mbtn msecondary','Start this '+word2+' over');
+    so.addEventListener('click',function(){
+      confirmBox('Start '+sh.name+' over',
+        'Its drawing and every wall, opening and spacing measurement on it are cleared. The name stays'+
+        (isInt()?', and so does its ceiling':'')+'.',
+        'Clear it',function(){
+          var j2=cur();
+          if(j2.active!==i){save();j2.active=i;}
+          sh.pts=[];sh.closed=false;sh.walls=[];sh.openings=[];delete sh.startKeys;
+          histShape=null;HISTS.delete(sh);intoState();setMode('draw');fitView();render();
+        });
+    });
+    mbox.appendChild(so);
+  }
   if(cur().shapes.length>1){
     var dl=el('button','mbtn mdanger','Delete this '+(isInt()?'room':'outline'));
     dl.addEventListener('click',function(){
@@ -4743,7 +4807,18 @@ function drawShapeBar(){
     /* a red rim means this outline is drawn but not yet placed */
     var untied=needsTie(j,i)&&!tieDone(sh)&&shapeSegs(sh)>0;
     var c=el('button','chip'+(i===j.active?' on':'')+(untied?' untied':''),sh.name);
+    /* press and hold any of them for its menu (rename, start over, delete) */
+    var held=false,holdT=null;
+    c.addEventListener('pointerdown',function(){
+      held=false;if(holdT)clearTimeout(holdT);
+      holdT=setTimeout(function(){held=true;holdT=null;openShapeMenu(sh,i);},550);
+    });
+    ['pointerup','pointerleave','pointercancel'].forEach(function(ev){
+      c.addEventListener(ev,function(){if(holdT){clearTimeout(holdT);holdT=null;}});
+    });
+    c.addEventListener('contextmenu',function(e){e.preventDefault();});
     c.addEventListener('click',function(){
+      if(held){held=false;return;}
       if(i===j.active)openShapeMenu(sh,i);else switchShape(i);
     });
     bar.appendChild(c);
