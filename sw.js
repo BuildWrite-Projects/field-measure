@@ -8,7 +8,7 @@
  * copy from cache.
  */
 var VERSION = 'fm-v29';
-/* fm-v29: Fit drawing to measurements (interior) */
+/* fm-v29: auto-fit to measurements (interior) */
 var CORE = [
   './',
   'index.html',

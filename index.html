@@ -1451,23 +1451,23 @@ function roomAdj(pts,skip){
   }
   return out;
 }
-function fitRoom(){
-  if(!isInt())return;
+function fitRoom(auto){
+  if(!isInt())return null;
   var j=cur();
-  if(!j.inch){say('Fit to measurements works on floors started at the new scale (from 11/12 on).');render();return;}
-  if(S.locked){say('The drawing is locked — tap the padlock first.');render();return;}
-  if(!S.closed||S.pts.length<3){say('Close the room first.');render();return;}
+  if(!j.inch){if(!auto){say('Fit to measurements works on floors started at the new scale (from 11/12 on).');render();}return null;}
+  if(S.locked){if(!auto){say('The drawing is locked — tap the padlock first.');render();}return null;}
+  if(!S.closed||S.pts.length<3){if(!auto){say('Close the room first.');render();}return null;}
   var P=S.pts,n=P.length,dirs=[],L0=[],meas=[],w=[],anyMeas=false;
   for(var i=0;i<n;i++){
     var A=P[i],B=P[(i+1)%n],dx=B.x-A.x,dy=B.y-A.y,len=Math.hypot(dx,dy);
-    if(len<0.01){say('Two corners sit on top of each other — drag one off first.');render();return;}
+    if(len<0.01){if(!auto){say('Two corners sit on top of each other — drag one off first.');render();}return null;}
     var a=Math.round(Math.atan2(dy,dx)/(Math.PI/4))*(Math.PI/4);
     var d={x:Math.round(Math.cos(a)*1e9)/1e9,y:Math.round(Math.sin(a)*1e9)/1e9};
     dirs.push(d);
     var m=dim16(wallLen(i));
     if(m){L0.push(m/16);meas.push(true);anyMeas=true;}else{L0.push(len);meas.push(false);}
   }
-  if(!anyMeas){say('Measure at least one wall first.');render();return;}
+  if(!anyMeas){if(!auto){say('Measure at least one wall first.');render();}return null;}
   /* how far the walls, at these lengths, miss closing */
   var ex=0,ey=0;for(i=0;i<n;i++){ex+=dirs[i].x*L0[i];ey+=dirs[i].y*L0[i];}
   function solve(wt){
@@ -1481,10 +1481,10 @@ function fitRoom(){
   for(i=0;i<n;i++)w.push(meas[i]?0.001:1);
   var del=solve(w);
   if(!del){w=w.map(function(){return 1;});del=solve(w);}
-  if(!del){say('Couldn’t fit this shape.');render();return;}
+  if(!del){if(!auto){say('Couldn’t fit this shape.');render();}return null;}
   var L=L0.map(function(x,k){return x+del[k];});
   if(L.some(function(x){return x<0.5;})){
-    say('These measurements can’t make this shape — a wall would shrink to nothing. Check the lengths.');render();return;
+    if(!auto){say('These measurements can’t make this shape — a wall would shrink to nothing. Check the lengths.');render();}return{msg:'These measurements can’t make this shape — check the lengths.'};
   }
   var NP=[{x:P[0].x,y:P[0].y}];
   for(i=0;i<n-1;i++)NP.push({x:NP[i].x+dirs[i].x*L[i],y:NP[i].y+dirs[i].y*L[i]});
@@ -1508,7 +1508,7 @@ function fitRoom(){
   }
   var movedIdx=Object.keys(moves).map(Number);
   /* one step of history for the whole floor */
-  hist.push(stateStr(movedIdx));if(hist.length>60)hist.shift();future=[];
+  if(!auto){hist.push(stateStr(movedIdx));if(hist.length>60)hist.shift();future=[];}
   for(i=0;i<n;i++){P[i].x=NP[i].x;P[i].y=NP[i].y;}
   movedIdx.forEach(function(si){
     j.shapes[si].pts.forEach(function(q){q.x=rnd(q.x+moves[si].x);q.y=rnd(q.y+moves[si].y);});
@@ -1519,8 +1519,23 @@ function fitRoom(){
   if(movedIdx.length)msg+=' Moved '+movedIdx.map(function(si){return j.shapes[si].name;}).join(', ')+' with it.';
   if(worst>=1/16)msg+=' Measured walls are '+fmt16(Math.round(Math.hypot(ex,ey)*16))+
     ' off — re-check wall '+(worstWall+1)+'.';
-  FMLog.add('fit',{room:curShape().name,moved:movedIdx.map(function(si){return j.shapes[si].name;}),off16:Math.round(Math.hypot(ex,ey)*16)});
-  say(msg);render();
+  FMLog.add('fit',{room:curShape().name,auto:!!auto,moved:movedIdx.map(function(si){return j.shapes[si].name;}),off16:Math.round(Math.hypot(ex,ey)*16)});
+  if(auto)return{msg:(worst>=1/16)?('Measured walls are '+fmt16(Math.round(Math.hypot(ex,ey)*16))+' off — re-check wall '+(worstWall+1)+'.'):'',
+    moved:movedIdx.map(function(si){return j.shapes[si].name;})};
+  say(msg);render();return null;
+}
+/* Auto-fit: on for inch-scale floors unless switched off for the floor. */
+function autoFitOn(){return isInt()&&cur().inch&&cur().autoFit!==false&&S.closed&&!S.locked;}
+/* Save a wall's length the auto-fit way: one step of history holding the
+   room and every other room on the floor, then the length, then the fit. */
+function saveLenAuto(i,v){
+  var j=cur(),all=[];
+  (j.shapes||[]).forEach(function(sh,si){if(si!==j.active&&sh.pts&&sh.pts.length)all.push(si);});
+  var snap=stateStr(all);
+  hist.push(snap);if(hist.length>60)hist.shift();future=[];
+  setWallLen(i,v);applyGaps(i);
+  var r=v?fitRoom(true):null;
+  return{snap:snap,res:r};
 }
 /* ---------- going round a room, not through it ----------
    A new wall that would cut through a room already drawn is walked round the
@@ -3073,10 +3088,18 @@ function distoDirect(raw){
   }
   if(t<=0){say('Got a zero reading. Nothing was filled in.');render();return;}
   var prevVal=wallLen(i),txt=(units()==='in'?fmtInches(t):fmtFtIn(t));
-  recordMeas(function(){setWallLen(i,prevVal);},i);
-  setWallLen(i,txt);applyGaps(i);
-  if(selectNextWall(i))say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+' (from the Disto). Now on wall '+(lastWall+1)+'.');
-  else say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+' (from the Disto). Every wall has a length.');
+  var flag='';
+  if(autoFitOn()){
+    /* the room takes the length straight away; Back or Undo puts it all back */
+    var af=saveLenAuto(i,txt);
+    recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();},i);
+    if(af.res&&af.res.msg)flag=' '+af.res.msg;
+  }else{
+    recordMeas(function(){setWallLen(i,prevVal);},i);
+    setWallLen(i,txt);applyGaps(i);
+  }
+  if(selectNextWall(i))say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+'. Now on wall '+(lastWall+1)+'.'+flag);
+  else say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+'. Every wall has a length.'+flag);
   render();
 }
 function distoCommit(){
@@ -3239,9 +3262,17 @@ function askLength(i){
   openSheet({title:'Wall '+(i+1)+' — length',
     fields:[{label:'Length',value:prevVal}],
     done:function(v){
-      recordMeas(function(){setWallLen(i,prevVal);},prevLast);
-      setWallLen(i,v[0]);applyGaps(i);
-      if(v[0])selectNextWall(i);
+      if(autoFitOn()&&v[0]){
+        /* the room takes the length straight away; Back or Undo puts it all back */
+        var af=saveLenAuto(i,v[0]);
+        recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();},prevLast);
+        selectNextWall(i);
+        if(af.res&&af.res.msg)say(af.res.msg);
+      }else{
+        recordMeas(function(){setWallLen(i,prevVal);},prevLast);
+        setWallLen(i,v[0]);applyGaps(i);
+        if(v[0])selectNextWall(i);
+      }
       render();
     }});
 }
@@ -4356,13 +4387,18 @@ function render(){
     var done=0;for(var i=0;i<n;i++)if(wallLen(i))done++;
     var t=el('div','tally'+(n&&done===n?' done':''),n?done+' of '+n+' walls measured'+(done===n?'  ✓':''):'No walls yet');
     view.appendChild(t);
-    /* inside, once something is measured: pull the drawing to true size */
-    if(isInt()&&S.closed&&done>0){
-      if(cur().inch){
-        var fb2=el('button','fitbtn','Fit drawing to measurements');
-        fb2.addEventListener('click',fitRoom);
-        view.appendChild(fb2);
-      }else view.appendChild(el('div','chk','Fit to measurements works on floors started at the new scale (from 11/12 on).'));
+    /* inside, on the new scale: each saved length reshapes the room. The
+       switch is per floor, a way out if it ever misbehaves on site. */
+    if(isInt()&&cur().inch){
+      var afOn=cur().autoFit!==false;
+      view.appendChild(rowBtn('Auto-fit to measurements',
+        afOn?'the room takes each length as you save it':'off — lengths don’t change the drawing',
+        afOn?'On':'Off',
+        function(){
+          var f=cur();f.autoFit=(f.autoFit===false);   /* flip */
+          if(f.autoFit&&S.closed&&done>0){fitRoom();}   /* catch up now it's on */
+          else{say(f.autoFit?'Auto-fit on.':'Auto-fit off for '+f.floor+'.');render();}
+        }));
     }
     /* A pool or a shed is drawn away from the house, so the drawing cannot
        say where it is. Two numbers off one house wall can. */
