@@ -1593,6 +1593,27 @@ function fitRoom(auto){
     moved:movedIdx.map(function(si){return j.shapes[si].name;})};
   say(msg);render();return null;
 }
+/* ---------- finished rooms lock themselves ----------
+   Once every wall of a room is measured or worked out, it locks: corners
+   can't be dragged and lengths can't be changed by accident. Unlock from the
+   room's press-and-hold menu (or say yes when changing a length asks). */
+function roomLockedNow(){var sh=isInt()&&curShape();return !!(sh&&sh.roomLocked);}
+function roomComplete(){
+  var n=segCount();if(!isInt()||!S.closed||n<3)return false;
+  var wo=workedOut();
+  for(var i=0;i<n;i++)if(!wallLen(i)&&!wo[i])return false;
+  return true;
+}
+/* after a length goes in: lock if that finished it. Returns a note to add. */
+function checkAutoLock(){
+  var sh=curShape();
+  if(!sh||sh.roomLocked||!roomComplete())return '';
+  sh.roomLocked=true;FMLog.add('lock',{room:sh.name,auto:true});
+  return ' '+sh.name+' is complete and locked — hold its name to unlock.';
+}
+/* after Undo or Back: a room that's no longer complete isn't locked */
+function checkAutoUnlock(){var sh=curShape();if(sh&&sh.roomLocked&&!roomComplete())sh.roomLocked=false;}
+function unlockRoom(sh){sh=sh||curShape();if(sh){sh.roomLocked=false;FMLog.add('unlock',{room:sh.name});}}
 /* Auto-fit: on for inch-scale floors unless switched off for the floor. */
 function autoFitOn(){return isInt()&&cur().inch&&cur().autoFit!==false&&S.closed&&!S.locked;}
 /* Save a wall's length the auto-fit way: one step of history holding the
@@ -2619,7 +2640,7 @@ cv.addEventListener('pointerdown',function(e){
                      alignOn?ALIGN_GRAB:DRAG_GRAB);
     grpIdx=-1;
     if(alignOn&&alignSel.length>=2&&hc>=0&&alignSel.indexOf(hc)>=0)grpIdx=hc;
-    dragIdx=(S.locked||S.mode==='open'||alignOn||jogOn||cutOn||eraseOn)?-1:hc;
+    dragIdx=(S.locked||roomLockedNow()||S.mode==='open'||alignOn||jogOn||cutOn||eraseOn)?-1:hc;
   }
   else if(k.length===2){
     moved=true;dragIdx=-1;dragLive=false;
@@ -3204,17 +3225,19 @@ function distoDirect(raw){
     render();return;
   }
   if(t<=0){say('Got a zero reading. Nothing was filled in.');render();return;}
+  if(roomLockedNow()){say(curShape().name+' is locked (it’s finished). Hold its name and choose Unlock to change it.');render();return;}
   var prevVal=wallLen(i),txt=(units()==='in'?fmtInches(t):fmtFtIn(t));
   var flag='';
   if(autoFitOn()){
     /* the room takes the length straight away; Back or Undo puts it all back */
     var af=saveLenAuto(i,txt);
-    recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();},i);
+    recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();checkAutoUnlock();},i);
     if(af.res&&af.res.msg)flag=' '+af.res.msg;
   }else{
-    recordMeas(function(){setWallLen(i,prevVal);},i);
+    recordMeas(function(){setWallLen(i,prevVal);checkAutoUnlock();},i);
     setWallLen(i,txt);applyGaps(i);
   }
+  flag+=checkAutoLock();
   if(selectNextWall(i))say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+'. Now on wall '+(lastWall+1)+'.'+flag);
   else say('✓ Wall '+(i+1)+': '+fmtFtIn(t)+'. Every wall has a length.'+flag);
   render();
@@ -3506,6 +3529,13 @@ function setRun(sp,v){
 function runLabel(sp){return 'Whole run, walls '+(sp.from+1)+'–'+(sp.to+1)+' (straight across)';}
 function askLength(i){
   SHremove=null;
+  if(roomLockedNow()){
+    var shL=curShape();
+    confirmBox(shL.name+' is locked',
+      'Every wall is measured, so it locked itself against accidental changes. Unlock it to change a length? Everything stays as it is.',
+      'Unlock',function(){unlockRoom(shL);render();askLength(i);});
+    return;
+  }
   var prevLast=lastWall,prevVal=wallLen(i);
   lastWall=i;
   var sp=isInt()?runSpan(i):null,prevRun=sp?runOf(sp):'';
@@ -3518,14 +3548,16 @@ function askLength(i){
       if(autoFitOn()&&(v[0]||rv)){
         /* the room takes the length straight away; Back or Undo puts it all back */
         var af=saveLenAuto(i,v[0],sp,rv);
-        recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();},prevLast);
+        recordMeas(function(){applyState(af.snap);if(hist[hist.length-1]===af.snap)hist.pop();checkAutoUnlock();},prevLast);
         if(v[0])selectNextWall(i);
-        if(af.res&&af.res.msg)say(af.res.msg);
+        var lk=checkAutoLock();
+        if((af.res&&af.res.msg)||lk)say((((af.res&&af.res.msg)||'')+lk).trim());
       }else{
-        recordMeas(function(){setWallLen(i,prevVal);if(sp)setRun(sp,prevRun);},prevLast);
+        recordMeas(function(){setWallLen(i,prevVal);if(sp)setRun(sp,prevRun);checkAutoUnlock();},prevLast);
         setWallLen(i,v[0]);applyGaps(i);
         if(sp)setRun(sp,rv);
         if(v[0])selectNextWall(i);
+        var lk2=checkAutoLock();if(lk2)say(lk2.trim());
       }
       render();
     }});
@@ -5028,7 +5060,7 @@ function render(){
   var canDrop=!hist.length&&!S.pts.length&&cur()&&cur().shapes.length>1;
   document.getElementById('undo').className='sbtn'+((S.locked||(!hist.length&&!canDrop))?' off':'');
   document.getElementById('redo').className='sbtn'+(S.locked?' off':'');
-  document.getElementById('tools').hidden=(S.mode!=='draw'||S.locked);
+  document.getElementById('tools').hidden=(S.mode!=='draw'||S.locked||roomLockedNow());
   var lk=document.getElementById('lock');
   var lkst=S.locked?'1':'0';
   if(lk.getAttribute('data-st')!==lkst){lk.innerHTML=S.locked?LOCK_SVG:UNLOCK_SVG;lk.setAttribute('data-st',lkst);}
@@ -5183,6 +5215,7 @@ function doUndo(){
   undo();
   S.openings=S.openings.filter(function(o){return o.wall<segCount();});
   if(alignOn){alignOn=false;alignSel=[];}
+  if(isInt())checkAutoUnlock();
   render();
 }
 document.getElementById('undo').addEventListener('click',function(){
@@ -5588,6 +5621,32 @@ function openShapeMenu(sh,i){
   var rn=el('button','mbtn msecondary','Rename');
   rn.addEventListener('click',function(){openShapeName(sh);});
   mbox.appendChild(rn);
+  if(isInt()&&shapeSegs(sh)){
+    /* Unlock: open a finished room back up, keeping everything */
+    if(sh.roomLocked){
+      var ul=el('button','mbtn mprimary','Unlock this room');
+      ul.addEventListener('click',function(){unlockRoom(sh);closeModal();say(sh.name+' unlocked — drawing and lengths are as they were.');render();});
+      mbox.appendChild(ul);
+    }
+    /* Clear measurements: keep the drawing, take off the lengths */
+    var hasLen=(sh.walls||[]).some(function(w){return w&&(w.len||w.run);});
+    if(hasLen){
+      var cm=el('button','mbtn msecondary','Clear measurements');
+      cm.addEventListener('click',function(){
+        confirmBox('Clear '+sh.name+'’s measurements',
+          'Every wall length and whole run comes off; the drawing stays as it is, so you can measure it again. Undo puts them back.',
+          'Clear them',function(){
+            var j2=cur();
+            if(j2.active!==i){save();j2.active=i;intoState();}
+            hist.push(stateStr());if(hist.length>60)hist.shift();future=[];
+            S.walls.forEach(function(w){if(w){delete w.len;delete w.run;delete w.endGap;delete w.approx;}});
+            sh.roomLocked=false;FMLog.add('clearLens',{room:sh.name});
+            setMode('measure');say(sh.name+'’s lengths are cleared. Undo puts them back.');render();
+          });
+      });
+      mbox.appendChild(cm);
+    }
+  }
   if(shapeSegs(sh)||(sh.pts&&sh.pts.length)){
     var word2=isInt()?'room':'outline';
     var so=el('button','mbtn msecondary','Start this '+word2+' over');
@@ -5598,7 +5657,7 @@ function openShapeMenu(sh,i){
         'Clear it',function(){
           var j2=cur();
           if(j2.active!==i){save();j2.active=i;}
-          sh.pts=[];sh.closed=false;sh.walls=[];sh.openings=[];delete sh.startKeys;
+          sh.pts=[];sh.closed=false;sh.walls=[];sh.openings=[];delete sh.startKeys;delete sh.roomLocked;
           histShape=null;HISTS.delete(sh);intoState();setMode('draw');fitView();render();
         });
     });
@@ -5649,7 +5708,7 @@ function drawShapeBar(){
   j.shapes.forEach(function(sh,i){
     /* a red rim means this outline is drawn but not yet placed */
     var untied=needsTie(j,i)&&!tieDone(sh)&&shapeSegs(sh)>0;
-    var c=el('button','chip'+(i===j.active?' on':'')+(untied?' untied':''),sh.name);
+    var c=el('button','chip'+(i===j.active?' on':'')+(untied?' untied':''),sh.name+(isInt()&&sh.roomLocked?' 🔒':''));
     /* press and hold any of them for its menu (rename, start over, delete) */
     var held=false,holdT=null;
     c.addEventListener('pointerdown',function(){
