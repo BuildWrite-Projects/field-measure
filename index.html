@@ -632,13 +632,21 @@ function resyncShape(){
   S.pts=sh.pts||(sh.pts=[]);S.closed=!!sh.closed;
   S.walls=sh.walls||(sh.walls=[]);S.openings=sh.openings||(sh.openings=[]);
 }
+/* What was last saved. save() runs on every redraw; it only stamps the jobs
+   as changed (and sends them) when something actually changed. Stamping on
+   every redraw made a phone that had just opened look newer than a change
+   made elsewhere, so it ignored that change and then wrote over it. */
+var lastSaved='';
 function save(){
   var j=cur(),sh=curShape();if(!j||!sh)return;
   sh.pts=S.pts;sh.closed=S.closed;sh.walls=S.walls;sh.openings=S.openings;
-  j.heights=S.heights;j.snap=S.snap;j.view=V;j.locked=!!S.locked;j.updated=Date.now();
+  j.heights=S.heights;j.snap=S.snap;j.view=V;j.locked=!!S.locked;
+  var body;try{body=JSON.stringify(DB);}catch(e){body=null;}
+  if(body!==null&&body===lastSaved)return;            /* nothing new */
+  j.updated=Date.now();
   if(curJob()!==j)curJob().updated=j.updated;   /* a floor: the job changed too */
   DB.updated=Date.now();
-  try{localStorage.setItem(KEY,JSON.stringify(DB));}catch(e){}
+  try{lastSaved=JSON.stringify(DB);localStorage.setItem(KEY,lastSaved);}catch(e){}
   schedulePush();
 }
 function shapeSegs(sh){return (!sh.pts||sh.pts.length<2)?0:(sh.closed?sh.pts.length:sh.pts.length-1);}
@@ -707,7 +715,7 @@ function initCloud(){
       });
       if(theirs>mine||!mineHasWork){
         DB=rem;migrateAll(DB);
-        try{localStorage.setItem(KEY,JSON.stringify(DB));}catch(e){}
+        try{lastSaved=JSON.stringify(DB);localStorage.setItem(KEY,lastSaved);}catch(e){}
         intoState();setMode(S.closed?'measure':'draw');fitView();render();
       }
     }
@@ -5731,6 +5739,12 @@ function drawShapeBar(){
 }
 
 intoState();
+/* what's on the phone at opening counts as already saved: opening the app
+   is not a change */
+(function(){var j0=cur(),sh0=curShape();
+  if(j0&&sh0){sh0.pts=S.pts;sh0.closed=S.closed;sh0.walls=S.walls;sh0.openings=S.openings;
+    j0.heights=S.heights;j0.snap=S.snap;j0.view=V;j0.locked=!!S.locked;}
+  try{lastSaved=JSON.stringify(DB);}catch(e){}})();
 setMode(S.pts.length&&S.closed?'measure':'draw');
 fit();
 initCloud();
