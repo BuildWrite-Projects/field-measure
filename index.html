@@ -525,8 +525,22 @@ function migrateJob(j){
   if(!j.heightsOff)j.heightsOff={};
 }
 function migrateAll(db){
-  if(db&&db.jobs)db.jobs.forEach(migrateJob);
+  if(db&&db.jobs)db.jobs.forEach(function(j){
+    migrateJob(j);
+    /* An outside nobody has drawn yet starts at the inch scale. One already
+       sketched stays as it is: its drawing isn't to scale and is not
+       converted behind anyone's back. */
+    if(!j.extInch&&!(j.shapes||[]).some(function(sh){return sh.pts&&sh.pts.length;})&&!(j.pts&&j.pts.length))
+      j.extInch=true;
+  });
 }
+/* Drawn to the inch (1 drawing unit = 1 inch)? Inside: per floor (inch).
+   Outside: per job (extInch) - its own name, because floors inherit from the
+   job, and an old floor must never pick up the outside's setting. */
+function inchScale(){var j=cur();if(!j)return false;return isInt()?!!j.inch:!!curJob().extInch;}
+/* Auto-fit's on/off switch: per floor inside, per job outside (extAutoFit,
+   again its own name so floors don't inherit it). */
+function autoFitPref(){return isInt()?cur().autoFit!==false:curJob().extAutoFit!==false;}
 /* A height the house simply does not have — no rake on a hip roof, no soffit
    on a flush eave. Switched off it stops being counted as missing and reads
    "n/a" everywhere instead of a blank waiting to be filled. */
@@ -556,6 +570,10 @@ var S={pts:[],closed:false,walls:[],openings:[],heights:{},mode:'draw',tab:'wall
 var hist=[],future=[];
 var V={ox:0,oy:0,s:1};
 var MINZ=0.2,MAXZ=9;
+/* Outside on the inch scale a whole house is ~2.5x more drawing units than
+   the old sketch, so every "how zoomed in is this" judgement scales by ZF. */
+function zf(){return (!isInt()&&inchScale())?2.5:1;}
+function minZ(){return MINZ/zf();}
 function W2S(w){return{x:w.x*V.s+V.ox,y:w.y*V.s+V.oy};}
 function S2W(p){return{x:(p.x-V.ox)/V.s,y:(p.y-V.oy)/V.s};}
 
@@ -566,9 +584,10 @@ function blankShape(name){return{name:name,pts:[],closed:false,walls:[],openings
    of jobs, shared with Receipt Run). bookPending: made with no signal, to be
    added to Job Book as soon as there is one. */
 function blankJob(name,bookJobId,bookPending){
+  /* extInch: the outside is drawn to the inch, like the inside */
   return{id:'j'+Date.now()+Math.floor(Math.random()*9999),name:name,updated:Date.now(),
-    bookJobId:bookJobId||null,bookPending:!!bookPending,
-    shapes:[blankShape('House')],active:0,heights:{},snap:90,view:{ox:0,oy:0,s:1}};
+    bookJobId:bookJobId||null,bookPending:!!bookPending,extInch:true,
+    shapes:[blankShape('House')],active:0,heights:{},snap:90,view:{ox:0,oy:0,s:0.5}};
 }
 function readDB(){
   try{
@@ -1087,12 +1106,12 @@ function paint(){
   }
   /* Markers are drawn at screen size, so zoomed out they swamp a busy
      outline. Shrink them with the zoom, down to a floor that stays visible. */
-  var hs=Math.max(0.3,Math.min(1,V.s*1.15)), tiny=hs<0.55;
+  var hs=Math.max(0.3,Math.min(1,V.s*zf()*1.15)), tiny=hs<0.55;
   /* The moment the markers start shrinking, the numbers go: that's the point
      where they stop being readable and start covering the shape. */
-  var hideNums=V.s<1/1.15;
+  var hideNums=V.s*zf()<1/1.15;
   /* Pinched right out, even the gap markers go and it's bare lines. */
-  var bare=V.s<=MINZ*1.03;
+  var bare=V.s<=minZ()*1.03;
   var n=segCount();
   /* walls the measurements already pin down draw as done, with their length */
   var woP={};try{woP=isInt()?workedOut():{};}catch(e){}
@@ -1372,7 +1391,7 @@ function drawnGap(){
 }
 /* Rounding for corners: to the quarter inch on an inch-scale floor (so a
    4 1/2" wall stays 4 1/2"), to whole units elsewhere as before. */
-function rnd(v){return (isInt()&&cur().inch)?Math.round(v*4)/4:Math.round(v);}
+function rnd(v){return inchScale()?Math.round(v*4)/4:Math.round(v);}
 function roomRings(){
   var j=cur(),out=[];if(!j||!j.shapes)return out;
   var t;
@@ -1526,9 +1545,9 @@ function fitAnchor(P,j){
   return i;
 }
 function fitRoom(auto){
-  if(!isInt())return null;
   var j=cur();
-  if(!j.inch){if(!auto){say('Fit to measurements works on floors started at the new scale (from 11/12 on).');render();}return null;}
+  if(!inchScale()){if(!auto){say(isInt()?'Fit to measurements works on floors started at the new scale (from 11/12 on).'
+    :'Fit to measurements works on outsides started at the new scale (from 11/14 on).');render();}return null;}
   if(S.locked){if(!auto){say('The drawing is locked — tap the padlock first.');render();}return null;}
   if(!S.closed||S.pts.length<3){if(!auto){say('Close the room first.');render();}return null;}
   var P=S.pts,n=P.length,dirs=[],L0=[],meas=[],w=[],anyMeas=false;
@@ -1578,7 +1597,9 @@ function fitRoom(auto){
     return out;
   }
   /* unmeasured walls give first; measured ones only if they must */
-  for(i=0;i<n;i++)w.push(meas[i]?0.001:1);
+  /* outside, the unmeasured walls can stretch by feet, and even a 0.001 share
+     of that left the measured ones a sixteenth off and raised a false alarm */
+  for(i=0;i<n;i++)w.push(meas[i]?(isInt()?0.001:1e-7):1);
   var del=solve(w,true);
   if(!del){w=w.map(function(){return 1;});del=solve(w,true);}
   if(!del)del=solve(w,false);         /* a run that can't be met: close the room without it */
@@ -1593,7 +1614,8 @@ function fitRoom(auto){
      and along it the end that lines up with that neighbour's own walls, so
      a line carrying on through both rooms stays straight. A room touching
      nothing keeps corner 1. */
-  var k0=fitAnchor(P,j);
+  /* outside, outlines don't share walls: corner 1 holds, nothing else moves */
+  var k0=isInt()?fitAnchor(P,j):0;
   var NP=new Array(n);NP[k0]={x:P[k0].x,y:P[k0].y};
   for(var m2=0;m2<n-1;m2++){
     var ii=(k0+m2)%n,nx2=(ii+1)%n;
@@ -1602,7 +1624,7 @@ function fitRoom(auto){
   NP=NP.map(function(q){return{x:rnd(q.x),y:rnd(q.y)};});
   /* rooms that move with it, and the rooms against those */
   var moves={},skip={},queue=[];skip[j.active]=true;
-  roomAdj(P,skip).forEach(function(a){
+  (isInt()?roomAdj(P,skip):[]).forEach(function(a){
     var o=(NP[a.wall].x-P[a.wall].x)*a.n.x+(NP[a.wall].y-P[a.wall].y)*a.n.y;
     if(Math.abs(o)<0.01||moves[a.si])return;
     moves[a.si]={x:a.n.x*o,y:a.n.y*o};queue.push(a.si);
@@ -1658,7 +1680,29 @@ function checkAutoLock(){
 function checkAutoUnlock(){var sh=curShape();if(sh&&sh.roomLocked&&!roomComplete())sh.roomLocked=false;}
 function unlockRoom(sh){sh=sh||curShape();if(sh){sh.roomLocked=false;FMLog.add('unlock',{room:sh.name});}}
 /* Auto-fit: on for inch-scale floors unless switched off for the floor. */
-function autoFitOn(){return isInt()&&cur().inch&&cur().autoFit!==false&&S.closed&&!S.locked;}
+function autoFitOn(){return inchScale()&&autoFitPref()&&S.closed&&!S.locked;}
+/* Outside, the first length sets the scale of the whole sketch: everything
+   drawn so far grows or shrinks evenly about corner 1 so that wall is right,
+   and the shape keeps its proportions instead of one wall shooting off. Only
+   while that is the one measured wall on the outside; after that the normal
+   fit takes over. Undo-safe: it's worked out from the lengths, not a flag. */
+function extFirstScale(i){
+  if(isInt()||!inchScale())return false;
+  var J=curJob(),cnt=0;
+  (J.shapes||[]).forEach(function(sh){(sh.walls||[]).forEach(function(w){if(w&&w.len)cnt++;});});
+  var m=dim16(wallLen(i));
+  if(cnt!==1||!m)return false;
+  var sg=seg(i),dd=Math.hypot(sg[1].x-sg[0].x,sg[1].y-sg[0].y);
+  if(dd<1)return false;
+  var k=(m/16)/dd;if(Math.abs(k-1)<0.01)return false;
+  var O={x:S.pts[0].x,y:S.pts[0].y};
+  (J.shapes||[]).forEach(function(sh){
+    var P=(sh===curShape())?S.pts:(sh.pts||[]);
+    P.forEach(function(q){q.x=Math.round((O.x+(q.x-O.x)*k)*4)/4;q.y=Math.round((O.y+(q.y-O.y)*k)*4)/4;});
+  });
+  FMLog.add('ext-scale',{wall:i,k:Math.round(k*1000)/1000});
+  return true;
+}
 /* Save a wall's length the auto-fit way: one step of history holding the
    room and every other room on the floor, then the length, then the fit. */
 function saveLenAuto(i,v,sp,rv){
@@ -1668,7 +1712,9 @@ function saveLenAuto(i,v,sp,rv){
   hist.push(snap);if(hist.length>60)hist.shift();future=[];
   setWallLen(i,v);applyGaps(i);
   if(sp)setRun(sp,rv);
+  var scaled=v?extFirstScale(i):false;
   var r=(v||rv)?fitRoom(true):null;
+  if(scaled)fitView();
   return{snap:snap,res:r};
 }
 /* ---------- going round a room, not through it ----------
@@ -2166,13 +2212,13 @@ function fitView(){
   if(!P.length&&isInt()){
     P=[];(cur().shapes||[]).forEach(function(sh){if(sh.pts)P=P.concat(sh.pts);});
   }
-  if(!P.length){V={ox:0,oy:0,s:1};paint();return;}
+  if(!P.length){V={ox:0,oy:0,s:(!isInt()&&inchScale())?0.5:1};paint();return;}
   var xs=P.map(function(q){return q.x;}),ys=P.map(function(q){return q.y;});
   var x0=Math.min.apply(null,xs),x1=Math.max.apply(null,xs),
       y0=Math.min.apply(null,ys),y1=Math.max.apply(null,ys);
   var pad=52,bw=Math.max(1,x1-x0),bh=Math.max(1,y1-y0);
   var sc=Math.min((W-pad*2)/bw,(H-pad*2)/bh);
-  V.s=Math.max(.2,Math.min(3,sc));
+  V.s=Math.max(minZ(),Math.min(3/zf(),sc));
   V.ox=W/2-((x0+x1)/2)*V.s;
   V.oy=H/2-((y0+y1)/2)*V.s;
   paint();
@@ -2754,7 +2800,7 @@ cv.addEventListener('pointermove',function(e){
     var a=ptrs[k[0]],b=ptrs[k[1]];
     var d=Math.hypot(a.x-b.x,a.y-b.y),mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2},r=cv.getBoundingClientRect();
     if(pinchD>0&&d>0){
-      var ns=Math.max(MINZ,Math.min(MAXZ,V.s*(d/pinchD))),f=ns/V.s;
+      var ns=Math.max(minZ(),Math.min(MAXZ,V.s*(d/pinchD))),f=ns/V.s;
       var mx=mid.x-r.left,my=mid.y-r.top;
       V.ox=mx-(mx-V.ox)*f;V.oy=my-(my-V.oy)*f;V.s=ns;
     }
@@ -2810,7 +2856,7 @@ cv.addEventListener('lostpointercapture',function(e){
 cv.addEventListener('wheel',function(e){
   e.preventDefault();
   var r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
-  var f=Math.max(MINZ,Math.min(MAXZ,V.s*(e.deltaY<0?1.12:1/1.12)))/V.s;
+  var f=Math.max(minZ(),Math.min(MAXZ,V.s*(e.deltaY<0?1.12:1/1.12)))/V.s;
   V.ox=mx-(mx-V.ox)*f;V.oy=my-(my-V.oy)*f;V.s*=f;paint();
 },{passive:false});
 
@@ -4152,7 +4198,7 @@ function measBack(){
 }
 function focusAt(p){
   if(!p)return;
-  if(V.s<1.6)V.s=1.6;
+  if(V.s*zf()<1.6)V.s=1.6/zf();
   V.ox=W/2-p.x*V.s;V.oy=H/2-p.y*V.s;
   flashAt=p;flashEnd=Date.now()+3500;
   if(flashTimer)clearInterval(flashTimer);
@@ -4238,7 +4284,7 @@ function goToBlank(){
     p=ptOn(o.wall,o.t);
   }
   if(!p)return;
-  if(V.s<1.6)V.s=1.6;
+  if(V.s*zf()<1.6)V.s=1.6/zf();
   V.ox=W/2-p.x*V.s;V.oy=H/2-p.y*V.s;
   flashAt=p;flashEnd=Date.now()+3500;
   if(flashTimer)clearInterval(flashTimer);
@@ -5489,17 +5535,21 @@ function render(){
     var t=el('div','tally'+(n&&done+nWo===n?' done':''),n?(done+' of '+n+' walls measured'+(nWo?', '+nWo+' worked out':'')+
       (done+nWo===n?'  ✓':'')):'No walls yet');
     view.appendChild(t);
-    /* inside, on the new scale: each saved length reshapes the room. The
-       switch is per floor, a way out if it ever misbehaves on site. */
-    if(isInt()&&cur().inch){
-      var afOn=cur().autoFit!==false;
+    /* on the inch scale, inside or out: each saved length reshapes the
+       drawing. The switch (per floor inside, per job outside) is a way out
+       if it ever misbehaves on site. */
+    if(inchScale()){
+      var afOn=autoFitPref();
       view.appendChild(rowBtn('Auto-fit to measurements',
-        afOn?'the room takes each length as you save it':'off — lengths don’t change the drawing',
+        afOn?(isInt()?'the room takes each length as you save it':'the outline takes each length as you save it')
+            :'off — lengths don’t change the drawing',
         afOn?'On':'Off',
         function(){
-          var f=cur();f.autoFit=(f.autoFit===false);   /* flip */
-          if(f.autoFit&&S.closed&&done>0){fitRoom();}   /* catch up now it's on */
-          else{say(f.autoFit?'Auto-fit on.':'Auto-fit off for '+f.floor+'.');render();}
+          var on;
+          if(isInt()){var f=cur();f.autoFit=(f.autoFit===false);on=f.autoFit;}
+          else{var J=curJob();J.extAutoFit=(J.extAutoFit===false);on=J.extAutoFit;}
+          if(on&&S.closed&&done>0){fitRoom();}   /* catch up now it's on */
+          else{say(on?'Auto-fit on.':'Auto-fit off for '+(isInt()?cur().floor:'the outside')+'.');render();}
         }));
     }
     /* A pool or a shed is drawn away from the house, so the drawing cannot
