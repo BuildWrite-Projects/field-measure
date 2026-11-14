@@ -15,6 +15,8 @@ with dimensions scribbled on it.
 - Capture heights, including foundation height
 - Flags measurements you haven't taken yet, so you don't get back
   to the office and find a gap
+- Photos, each labelled with the wall, opening or feature it shows; shrunk
+  to 2048 px on the phone and backed up to Supabase Storage
 - Several jobs at once, switchable
 - Works with no signal; syncs when you're back in range
 
@@ -25,6 +27,7 @@ Pages, installable to an iPhone home screen.
 
 - `index.html` — the whole app
 - `storage.js` — the only file that knows where data lives
+- `photos.js` — photos: shrinking, keeping them on the phone, backing them up
 - `config.js` — connection settings
 - `sw.js` — offline support
 - `supabase-setup.sql` — the database table and its security rules

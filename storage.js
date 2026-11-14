@@ -469,6 +469,8 @@
 
     signedIn: function () { return !!session; },
     email: function () { return session ? session.user.email : null; },
+    /* the signed-in person's id: photos are filed under it (photos.js) */
+    uid: function () { return session ? session.user.id : null; },
     prompt: askToSignIn
   };
 

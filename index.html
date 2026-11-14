@@ -9,6 +9,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
 <script src="storage.js"></script>
+<script src="photos.js"></script>
 <script src="feedback.js"></script>
 <script>
   /* Feedback button in the header, before the sync status */
@@ -174,6 +175,22 @@ pre#sumtext{font-family:var(--num);font-size:12.5px;line-height:1.6;white-space:
   font-size:16px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
 .sendrow .primary{background:var(--accent);color:var(--accent-ink)}
 .sendrow .second{background:var(--surface-2);color:var(--ink);border:1px solid var(--line)}
+.pgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}
+.pcell{position:relative;background:var(--surface-2);border:1px solid var(--line);border-radius:7px;
+  padding:0;overflow:hidden;aspect-ratio:1/1;color:inherit}
+.pcell img{display:block;width:100%;height:100%;object-fit:cover}
+.pcell .pcap{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.62);color:#fff;
+  font-family:var(--body);font-size:10.5px;line-height:1.25;padding:3px 5px;text-align:left;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcell .pcap.untag{background:var(--miss)}
+.pcell .pup{position:absolute;top:4px;right:4px;background:rgba(0,0,0,.62);color:#fff;border-radius:9px;
+  font-size:10px;padding:1px 6px;font-family:var(--body)}
+.pchips{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0}
+.pchip{border:1px solid var(--line);background:var(--surface-2);color:var(--ink);border-radius:18px;
+  padding:8px 12px;font-family:var(--body);font-size:14px}
+.pchip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.pbig{display:block;max-width:100%;max-height:42vh;margin:4px auto 0;border-radius:8px;border:1px solid var(--line)}
+.pmeta{font-family:var(--body);font-size:12.5px;color:var(--ink-2);text-align:center;padding:2px 0 4px}
 #shotwrap{margin-top:12px}
 #shotwrap img{display:block;width:100%;border:1px solid var(--line);border-radius:8px}
 #shotwrap .cap{font-family:var(--body);font-size:12.5px;color:var(--ink-2);padding:7px 2px 0;line-height:1.45}
@@ -348,8 +365,12 @@ button:focus-visible,.row:focus-visible{outline:2px solid var(--accent);outline-
       <button class="tab" role="tab" data-tab="walls" aria-selected="true">Walls</button>
       <button class="tab" role="tab" data-tab="openings" aria-selected="false">Openings</button>
       <button class="tab" role="tab" data-tab="heights" aria-selected="false">Heights</button>
+      <button class="tab" role="tab" data-tab="photos" aria-selected="false">Photos</button>
       <button class="tab" role="tab" data-tab="summary" aria-selected="false">Summary</button>
     </div>
+    <!-- the first opens the camera straight away; the second picks from Photos -->
+    <input id="camin" type="file" accept="image/*" capture="environment" hidden>
+    <input id="libin" type="file" accept="image/*" multiple hidden>
     <div id="view"></div>
   </div>
   </div>
@@ -704,7 +725,8 @@ function schedulePush(){
 function initCloud(){
   if(!window.FMStore){setSync('local');return;}
   FMStore.init({
-    onStatus:setSync,
+    /* synced and signed in: a good moment to send any waiting photos too */
+    onStatus:function(m){setSync(m);if(m==='ok'&&window.FMPhotos)FMPhotos.pump();},
     onReady:linkJobs,
     onRemote:function(rem){
       /* The server has a copy. Take it only if it is newer than what is on this
@@ -4771,6 +4793,224 @@ function summaryText(){
 var LOCK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 10.9V7.9a3.5 3.5 0 0 1 7 0v3"/><rect x="5.1" y="10.9" width="13.8" height="9.3" rx="1.7"/><circle cx="12" cy="15.5" r="1.15" fill="currentColor" stroke="none"/></svg>';
 var UNLOCK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 10.9V7.9a3.5 3.5 0 0 1 5.98-2.47"/><rect x="5.1" y="10.9" width="13.8" height="9.3" rx="1.7"/><circle cx="12" cy="15.5" r="1.15" fill="currentColor" stroke="none"/></svg>';
 
+/* ---------- photos ----------
+   The pictures themselves live in photos.js (on the phone, then backed up).
+   The job only keeps the list: job.photos = [{id, at, w, h, bytes, up, tag}].
+   They belong to the whole job, not to a floor, so they are always read and
+   written on curJob(). A tag says what the photo is of, in words that still
+   mean something when the drawing has changed:
+   {side:'ext'|'int', floor, room, kind:'general'|'wall'|'opening', i, text} */
+function jobPhotos(){var j=curJob();if(!j)return[];if(!j.photos)j.photos=[];return j.photos;}
+function findPhoto(id){var L=jobPhotos();for(var i=0;i<L.length;i++)if(L[i].id===id)return L[i];return null;}
+function photoLabel(p){
+  var t=p&&p.tag;if(!t)return 'Not labelled';
+  return [t.side==='int'?t.floor:'',t.room,t.text].filter(Boolean).join(' · ');
+}
+function mb(bytes){return (bytes/1048576).toFixed(bytes<10485760?1:0)+' MB';}
+var EXT_SHOTS=['Front','Back','Left side','Right side','Corners','Roof & eaves','Foundation & grade',
+  'Meters & utilities','Deck / porch / stairs','Street & house number','Other'];
+var INT_SHOTS=['Whole room','Ceiling','Floor','Electrical panel','Heating / water heater','Stairs','Other'];
+/* the choices, from what has been drawn on the outline or room that's open */
+function photoChoices(){
+  var j=cur(),sh=curShape(),inside=isInt(),out=[];
+  var base={side:inside?'int':'ext',floor:inside?j.floor:null,room:sh?sh.name:''};
+  function mk(kind,i,text){var t={};for(var k in base)t[k]=base[k];t.kind=kind;t.i=i;t.text=text;return t;}
+  (inside?INT_SHOTS:EXT_SHOTS).forEach(function(n){out.push(mk('general',null,n));});
+  for(var w=0;w<segCount();w++)out.push(mk('wall',w,'Wall '+(w+1)));
+  var seen={};
+  S.openings.forEach(function(o,oi){
+    var nm=kindLabel(kindOf(o))+' on wall '+(o.wall+1);
+    seen[nm]=(seen[nm]||0)+1;
+    out.push(mk('opening',oi,nm+(seen[nm]>1?' ('+seen[nm]+')':'')));
+  });
+  return out;
+}
+function sameTag(a,b){return !!(a&&b&&a.side===b.side&&a.floor===b.floor&&a.room===b.room&&a.text===b.text);}
+
+function renderPhotos(view){
+  var L=jobPhotos(),bytes=0,notUp=0,untagged=0;
+  L.forEach(function(p){bytes+=p.bytes||0;if(!p.up)notUp++;if(!p.tag)untagged++;});
+  view.appendChild(el('div','tally',L.length
+    ? L.length+' photo'+(L.length>1?'s':'')+'  ·  '+mb(bytes)
+    : 'No photos yet'));
+  var row=el('div','sendrow');
+  var take=el('button','primary','Take photo');
+  var lib=el('button','second','From library');
+  take.addEventListener('click',function(){photoPick('camin');});
+  lib.addEventListener('click',function(){photoPick('libin');});
+  row.appendChild(take);row.appendChild(lib);view.appendChild(row);
+  var signed=window.FMStore&&FMStore.signedIn();
+  if(L.length&&!signed){
+    view.appendChild(el('div','chk bad','Not backed up — sign in (tap the sync status) so these photos are kept. Until then this phone holds the only copy.'));
+  }else if(notUp){
+    view.appendChild(el('div','chk',notUp+' waiting to back up. They go up on their own as soon as there’s signal.'));
+  }else if(L.length){
+    view.appendChild(el('div','chk ok','All backed up.'));
+  }
+  if(untagged)view.appendChild(el('div','chk',untagged+' not labelled yet — tap one to say what it is.'));
+  if(!L.length){
+    view.appendChild(el('div','empty-state','Each photo is shrunk to '+FMPhotos.MAX_EDGE+
+      ' px as it’s taken (about half a megabyte), so a whole job fits in one email. Label each one with the wall, opening or feature it shows.'));
+    return;
+  }
+  var grid=el('div','pgrid');
+  L.slice().sort(function(a,b){return a.at-b.at;}).forEach(function(p){
+    var c=el('button','pcell');
+    var img=document.createElement('img');img.alt=photoLabel(p);
+    c.appendChild(img);
+    c.appendChild(el('div','pcap'+(p.tag?'':' untag'),photoLabel(p)));
+    if(!p.up)c.appendChild(el('div','pup','on phone'));
+    FMPhotos.url(p.id,curJob().id).then(function(u){if(u)img.src=u;});
+    c.addEventListener('click',function(){openPhoto(p.id);});
+    grid.appendChild(c);
+  });
+  view.appendChild(grid);
+}
+
+function photoPick(which){
+  var inp=document.getElementById(which);
+  inp.value='';
+  inp.click();
+}
+function photosIn(e){
+  var files=[].slice.call(e.target.files||[]);
+  e.target.value='';
+  if(!files.length)return;
+  var j=curJob(),jobId=j.id,made=[];
+  say(files.length>1?'Saving '+files.length+' photos…':'Saving photo…');render();
+  var p=Promise.resolve();
+  files.forEach(function(f){
+    p=p.then(function(){
+      return FMPhotos.add(f,jobId).then(function(meta){
+        meta.up=false;meta.tag=null;
+        var owner=null;DB.jobs.forEach(function(x){if(x.id===jobId)owner=x;});
+        if(!owner)return;
+        if(!owner.photos)owner.photos=[];
+        owner.photos.push(meta);made.push(meta);
+        FMLog.add('photo',{id:meta.id,kb:Math.round(meta.bytes/1024)});
+      },function(err){say((err&&err.message)||'Couldn’t save that photo.');});
+    });
+  });
+  p.then(function(){
+    save();
+    if(!made.length){render();return;}
+    say(made.length>1?made.length+' photos saved.':'Photo saved.');
+    if(S.tab!=='photos'){openTab('photos');}
+    render();
+    /* one photo: ask what it is right away, while it's in front of you */
+    if(made.length===1&&curJob().id===jobId)openPhotoTag(made[0].id,true);
+  });
+}
+document.getElementById('camin').addEventListener('change',photosIn);
+document.getElementById('libin').addEventListener('change',photosIn);
+
+function setPhotoTag(id,tag){
+  var p=findPhoto(id);if(!p)return;
+  p.tag=tag;save();render();
+}
+/* "What is this a photo of?" — right after taking one, or to relabel. */
+function openPhotoTag(id,fresh){
+  var p=findPhoto(id);if(!p)return;
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',fresh?'What’s this of?':'Label this photo'));
+  var img=document.createElement('img');img.className='pbig';img.alt='';
+  img.style.maxHeight='22vh';
+  FMPhotos.url(id,curJob().id).then(function(u){if(u)img.src=u;});
+  mbox.appendChild(img);
+  var ch=photoChoices();
+  function group(title,kind){
+    var items=ch.filter(function(t){return t.kind===kind;});
+    if(!items.length)return;
+    mbox.appendChild(el('div','sub',title));
+    var wrap=el('div','pchips');
+    items.forEach(function(t){
+      var b=el('button','pchip'+(sameTag(p.tag,t)?' on':''),t.text);
+      b.addEventListener('click',function(){
+        setPhotoTag(id,t);
+        if(fresh)openPhotoNext(id);else openPhoto(id);
+      });
+      wrap.appendChild(b);
+    });
+    mbox.appendChild(wrap);
+  }
+  var where=isInt()?cur().floor+' · '+curShape().name:curShape().name;
+  mbox.appendChild(el('div','chk','On '+where+'. To label it for another '+(isInt()?'room':'outline')+', switch to it first.'));
+  group('Walls','wall');
+  group('Openings','opening');
+  group(isInt()?'The room':'The house','general');
+  var row=el('div','crow');row.style.marginTop='8px';
+  var skip=el('button','mbtn msecondary',fresh?'Later':'Close');
+  skip.addEventListener('click',function(){if(fresh)openPhotoNext(id);else openPhoto(id);});
+  row.appendChild(skip);mbox.appendChild(row);
+}
+/* After labelling a fresh shot: keep going, or stop. */
+function openPhotoNext(id){
+  var p=findPhoto(id);
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle','Saved'));
+  mbox.appendChild(el('div','chk',p?photoLabel(p)+'  ·  '+mb(p.bytes||0):''));
+  var row=el('div','crow');
+  var done=el('button','mbtn msecondary','Done');
+  done.addEventListener('click',closeModal);
+  var more=el('button','mbtn mprimary','Take another');
+  more.addEventListener('click',function(){closeModal();photoPick('camin');});
+  row.appendChild(done);row.appendChild(more);mbox.appendChild(row);
+}
+function openPhoto(id){
+  var p=findPhoto(id);if(!p){closeModal();return;}
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',photoLabel(p)));
+  var img=document.createElement('img');img.className='pbig';img.alt=photoLabel(p);
+  mbox.appendChild(img);
+  var meta=el('div','pmeta','Loading…');mbox.appendChild(meta);
+  FMPhotos.url(id,curJob().id).then(function(u){
+    if(u){img.src=u;}
+    var d=new Date(p.at);
+    meta.textContent=(u?'':'Not on this phone and not backed up yet — it’s on the phone that took it.  ')+
+      d.toLocaleDateString()+' '+d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})+
+      '  ·  '+(p.w&&p.h?p.w+'×'+p.h+'  ·  ':'')+mb(p.bytes||0)+'  ·  '+(p.up?'backed up':'on this phone only');
+  });
+  var row=el('div','crow');row.style.marginTop='6px';
+  var lab=el('button','mbtn msecondary',p.tag?'Relabel':'Label it');
+  lab.addEventListener('click',function(){openPhotoTag(id,false);});
+  var del=el('button','mbtn mdanger','Delete');
+  del.addEventListener('click',function(){
+    mbox.innerHTML='';
+    mbox.appendChild(el('div','mtitle','Delete photo'));
+    var box=el('div','confirm');
+    var w=el('div','warn');w.innerHTML='<b>This cannot be undone.</b>';
+    box.appendChild(w);
+    box.appendChild(el('div','warn','“'+photoLabel(p)+'” goes from this phone and from the backup.'));
+    var r2=el('div','crow');
+    var no=el('button','mbtn msecondary','Keep it');
+    no.addEventListener('click',function(){openPhoto(id);});
+    var yes=el('button','mbtn mdanger','Delete');
+    yes.addEventListener('click',function(){
+      var j=curJob();
+      j.photos=(j.photos||[]).filter(function(x){return x.id!==id;});
+      FMPhotos.remove(id,j.id);
+      FMLog.add('photo-del',{id:id});
+      save();closeModal();render();
+    });
+    r2.appendChild(no);r2.appendChild(yes);box.appendChild(r2);mbox.appendChild(box);
+  });
+  row.appendChild(lab);row.appendChild(del);mbox.appendChild(row);
+  var cl=el('button','mbtn msecondary','Close');cl.style.marginTop='8px';cl.style.width='100%';
+  cl.addEventListener('click',closeModal);
+  mbox.appendChild(cl);
+}
+function initPhotos(){
+  if(!window.FMPhotos)return;
+  FMPhotos.init({
+    client:function(){return window.FMStore&&FMStore.client();},
+    uid:function(){return window.FMStore&&FMStore.uid&&FMStore.uid();},
+    /* backed up: note it on the job, so every phone knows */
+    onUploaded:function(id,jobId){
+      DB.jobs.forEach(function(j){(j.photos||[]).forEach(function(p){if(p.id===id)p.up=true;});});
+      save();if(S.tab==='photos')render();
+    }
+  });
+}
 function render(){
   var view=document.getElementById('view');view.innerHTML='';
   var n=segCount();
@@ -4835,6 +5075,8 @@ function render(){
           showLen(runOf(sp)),function(){askLength(sp.from);}));
       })(jr);}
     }
+  }else if(S.tab==='photos'){
+    renderPhotos(view);
   }else if(S.tab==='openings'){
     var tot=S.openings.length,ok=S.openings.filter(function(o){return o.w&&o.h;}).length;
     view.appendChild(el('div','tally'+(tot&&ok===tot?' done':''),
@@ -5157,7 +5399,7 @@ function render(){
   rb.className=(bw<2)?'off':'';
   rb.textContent=nextDir>0?'\u21BA':'\u21BB';
   if(total!==lastTotal){findIdx=0;lastTotal=total;}
-  document.getElementById('view').style.maxHeight=(S.tab==='summary')?'58vh':'148px';
+  document.getElementById('view').style.maxHeight=(S.tab==='summary'||S.tab==='photos')?'58vh':'148px';
   document.getElementById('panel').hidden=!panelOpen;
   document.getElementById('caret').textContent=panelOpen?'\u25be Hide list':'\u25b4 Show list';
   document.getElementById('close').hidden=!(S.mode==='draw'&&S.pts.length>2&&!S.closed);
@@ -5539,6 +5781,7 @@ function drawConfirm(j,i){
   no.addEventListener('click',openJobs);
   var yes=el('button','mbtn mdanger','Delete');
   yes.addEventListener('click',function(){
+    (j.photos||[]).forEach(function(p){if(window.FMPhotos)FMPhotos.remove(p.id,j.id);});
     DB.jobs.splice(i,1);
     if(!DB.jobs.length)DB.jobs.push(blankJob('Job 1'));
     if(DB.active>=DB.jobs.length)DB.active=DB.jobs.length-1;
@@ -5845,6 +6088,7 @@ intoState();
 setMode(S.pts.length&&S.closed?'measure':'draw');
 fit();
 initCloud();
+initPhotos();
 
 /* Tapping the header status opens sign-in, or shows who is signed in. */
 (function(){
