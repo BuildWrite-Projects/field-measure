@@ -190,6 +190,7 @@ pre#sumtext{font-family:var(--num);font-size:12.5px;line-height:1.6;white-space:
   padding:8px 12px;font-family:var(--body);font-size:14px}
 .pchip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .pbig{display:block;max-width:100%;max-height:42vh;margin:4px auto 0;border-radius:8px;border:1px solid var(--line)}
+.shint{font-family:var(--body);font-size:14.5px;line-height:1.45;color:var(--ink);padding:4px 0}
 .pmeta{font-family:var(--body);font-size:12.5px;color:var(--ink-2);text-align:center;padding:2px 0 4px}
 #shotwrap{margin-top:12px}
 #shotwrap img{display:block;width:100%;border:1px solid var(--line);border-radius:8px}
@@ -4714,6 +4715,8 @@ function summaryText(){
   (j&&j.shapes?j.shapes:[curShape()]).forEach(function(sh,si){
     withShape(sh,function(){
       var n=segCount();
+      /* the label a photo of something on this outline would carry */
+      function here(text){return{side:inside?'int':'ext',floor:inside?j.floor:null,room:sh.name,text:text};}
       out.push('');
       out.push(sh.name.toUpperCase()+'  ('+n+' walls, in order walked)');
       if(inside){
@@ -4724,6 +4727,7 @@ function summaryText(){
           ' along wall '+((c.lowWall>=0)?(c.lowWall+1):'\u2014 MISSING \u2014')+', high side '+(showLen(c.high)||'\u2014 MISSING \u2014'));
         else out.push('  CEILING  tray, main '+(showLen(c.h)||'\u2014 MISSING \u2014')+', tray top '+
           (showLen(c.raised)||'\u2014 MISSING \u2014')+', stepped in '+(showLen(c.step)||'\u2014 MISSING \u2014'));
+        out[out.length-1]+=photoRefs(here('Ceiling'));
       }
       /* where it sits, before anything else about it — this is the line that
          lets it be placed in SketchUp at all */
@@ -4737,16 +4741,18 @@ function summaryText(){
           out.push('  SITS  — MISSING — (not tied to the house)');
       }
       for(var i=0;i<n;i++){
-        out.push('  Wall '+(i+1)+'  '+(showLen(wallLen(i))||'— MISSING —'));
+        out.push('  Wall '+(i+1)+'  '+(showLen(wallLen(i))||'— MISSING —')+photoRefs(here('Wall '+(i+1))));
         var wrun=S.walls[i]&&S.walls[i].run;
         if(inside&&wrun&&wrun.len)
           out.push('      whole run, walls '+(i+1)+'-'+(wrun.to+1)+' straight across:  '+showLen(wrun.len));
         wallOpenings(i).forEach(function(oi){
           var o=S.openings[oi];
-          out.push('      '+kindLabel(kindOf(o))+'  '+
+          /* "Window 2" when the wall has two: the name its photo carries */
+          var otx=openingText(oi);
+          out.push('      '+otx.replace(/ on wall \d+$/,'')+'  '+
             ((o.w&&o.h)?showLen(o.w)+' w x '+showLen(o.h)+' h':'— MISSING —')+
             (o.sill?'  (sill '+showLen(o.sill)+')':'')+
-            (o.approx?'   [estimated]':''));
+            (o.approx?'   [estimated]':'')+photoRefs(here(otx)));
         });
         var ch=gapChain(i);
         if(ch.length){
@@ -4769,7 +4775,7 @@ function summaryText(){
       }
     });
   });
-  if(inside)return out.join('\n');
+  if(inside){photoSummary(out);return out.join('\n');}
   out.push('');
   out.push('HEIGHTS');
   out.push('  (all measured from top of foundation, which runs level)');
@@ -4788,7 +4794,32 @@ function summaryText(){
       out.push('    Pitch         '+(r.pitch||'— MISSING —'));
     });
   }
+  photoSummary(out);
   return out.join('\n');
+}
+/* The photos that belong with this summary (this side; inside, this floor
+   and the whole-job shots), numbered, then what's still to take and what was
+   skipped and why. */
+function photoSummary(out){
+  ensurePhotoNums();
+  var inside=isInt(),side=inside?'int':'ext',fl=inside?cur().floor:null;
+  function mine(t){return t&&t.side===side&&(!inside||!t.floor||t.floor===fl);}
+  var L=jobPhotos().filter(function(p){return !p.tag||mine(p.tag);})
+    .sort(function(a,b){return a.n-b.n;});
+  var st=shotState(),need=st.need.filter(function(s){return mine(s.tag);}),
+      skipped=st.list.filter(function(s){return s.skip&&!s.photos.length&&mine(s.tag);});
+  if(!L.length&&!need.length&&!skipped.length)return;
+  out.push('');
+  out.push('PHOTOS  ('+L.length+', numbered in the order taken)');
+  L.forEach(function(p){out.push('  '+(p.n<10?' ':'')+p.n+'  '+photoLabel(p));});
+  if(need.length){
+    out.push('  STILL TO TAKE');
+    need.forEach(function(s){out.push('    '+[s.group==='Whole job'?'':s.group,s.tag.text].filter(Boolean).join(' · '));});
+  }
+  if(skipped.length){
+    out.push('  SKIPPED');
+    skipped.forEach(function(s){out.push('    '+[s.group==='Whole job'?'':s.group,s.tag.text].filter(Boolean).join(' · ')+' — '+s.skip);});
+  }
 }
 var LOCK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 10.9V7.9a3.5 3.5 0 0 1 7 0v3"/><rect x="5.1" y="10.9" width="13.8" height="9.3" rx="1.7"/><circle cx="12" cy="15.5" r="1.15" fill="currentColor" stroke="none"/></svg>';
 var UNLOCK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 10.9V7.9a3.5 3.5 0 0 1 5.98-2.47"/><rect x="5.1" y="10.9" width="13.8" height="9.3" rx="1.7"/><circle cx="12" cy="15.5" r="1.15" fill="currentColor" stroke="none"/></svg>';
@@ -4806,38 +4837,161 @@ function photoLabel(p){
   var t=p&&p.tag;if(!t)return 'Not labelled';
   return [t.side==='int'?t.floor:'',t.room,t.text].filter(Boolean).join(' · ');
 }
-function mb(bytes){return (bytes/1048576).toFixed(bytes<10485760?1:0)+' MB';}
-var EXT_SHOTS=['Front','Back','Left side','Right side','Corners','Roof & eaves','Foundation & grade',
-  'Meters & utilities','Deck / porch / stairs','Street & house number','Other'];
-var INT_SHOTS=['Whole room','Ceiling','Floor','Electrical panel','Heating / water heater','Stairs','Other'];
-/* the choices, from what has been drawn on the outline or room that's open */
-function photoChoices(){
-  var j=cur(),sh=curShape(),inside=isInt(),out=[];
-  var base={side:inside?'int':'ext',floor:inside?j.floor:null,room:sh?sh.name:''};
-  function mk(kind,i,text){var t={};for(var k in base)t[k]=base[k];t.kind=kind;t.i=i;t.text=text;return t;}
-  (inside?INT_SHOTS:EXT_SHOTS).forEach(function(n){out.push(mk('general',null,n));});
-  for(var w=0;w<segCount();w++)out.push(mk('wall',w,'Wall '+(w+1)));
-  var seen={};
-  S.openings.forEach(function(o,oi){
-    var nm=kindLabel(kindOf(o))+' on wall '+(o.wall+1);
-    seen[nm]=(seen[nm]||0)+1;
-    out.push(mk('opening',oi,nm+(seen[nm]>1?' ('+seen[nm]+')':'')));
-  });
+function mb(bytes){return bytes<1048576?Math.max(1,Math.round(bytes/1024))+' KB':(bytes/1048576).toFixed(bytes<10485760?1:0)+' MB';}
+/* ---------- the shot list ----------
+   Built from the drawing, so it grows as the drawing does. A photo counts
+   toward a shot when its label matches: same side, floor, room and text.
+   That's why every label is plain words ("Wall 3", "Window 2 on wall 4")
+   rather than an index: it still means the same thing next week.
+   Outside: every wall straight on, every outside corner from the diagonal,
+   every opening, plus the street and the meters.
+   Inside: each room from two opposite corners (between them every wall is
+   in a picture), a sloped or tray ceiling, every opening, plus the panel,
+   the mechanicals and, with more than one floor, the stairs. */
+function shotKey(t){return [t.side||'',t.side==='int'?(t.floor||''):'',t.room||'',t.text||''].join('|');}
+function photoKey(p){return (p&&p.tag)?shotKey(p.tag):null;}
+/* The outline's outside corners: the ones that turn the same way as the
+   outline as a whole. An inside corner on a jog shows in the wall shots. */
+function outsideCorners(){
+  var P=S.pts,n=P.length,area=0,out=[];
+  if(!S.closed||n<3)return out;
+  for(var i=0;i<n;i++){var a=P[i],b=P[(i+1)%n];area+=a.x*b.y-b.x*a.y;}
+  for(var k=0;k<n;k++){
+    var p0=P[(k-1+n)%n],p1=P[k],p2=P[(k+1)%n];
+    var cr=(p1.x-p0.x)*(p2.y-p1.y)-(p1.y-p0.y)*(p2.x-p1.x);
+    if(cr*area>0)out.push(k);
+  }
   return out;
 }
-function sameTag(a,b){return !!(a&&b&&a.side===b.side&&a.floor===b.floor&&a.room===b.room&&a.text===b.text);}
+/* "Window on wall 2", or "Window 2 on wall 2" when the wall has more than
+   one, counted from the wall's top-left corner like the spacing is. */
+function openingText(oi){
+  var o=S.openings[oi],k=kindOf(o);
+  var same=wallOpenings(o.wall).filter(function(x){return kindOf(S.openings[x])===k;});
+  return kindLabel(k)+(same.length>1?' '+(same.indexOf(oi)+1):'')+' on wall '+(o.wall+1);
+}
+var JOB_SHOTS_EXT=[['Street & house number','From the street, with the house number readable.'],
+  ['Meters & utilities','Electric and gas meters, the AC unit, where the services come in.']];
+var JOB_SHOTS_INT=[['Electrical panel','Door open, close enough to read the breaker labels.'],
+  ['Heating / water heater','Furnace, water heater and the flue, with some room around them.']];
+var STAIRS_SHOT=['Stairs','From the bottom, the whole run in.'];
+var EXTRA_EXT=['Front','Back','Left side','Right side','Roof & eaves','Foundation & grade','Deck / porch / stairs','Other'];
+var EXTRA_INT=['Whole room','Floor','Other'];
+function shotList(){
+  var J=curJob(),inside=isInt(),out=[];
+  if(!J)return out;
+  var side=inside?'int':'ext';
+  function add(fl,fi,si,room,kind,text,hint,at){
+    var tag={side:side,floor:inside?fl:null,room:room,kind:kind,text:text};
+    out.push({key:shotKey(tag),tag:tag,hint:hint,fi:fi,si:si,at:at||null,
+      group:[inside?fl:'',room].filter(Boolean).join(' · ')||'Whole job'});
+  }
+  var floors=inside?((J.interior&&J.interior.floors)||[]):[J];
+  floors.forEach(function(F,fi){
+    var fl=inside?F.floor:null;
+    (F.shapes||[]).forEach(function(sh,si){
+      if(!sh.pts||sh.pts.length<2)return;
+      withShape(sh,function(){
+        var n=segCount(),P=S.pts;
+        function mid(w){var s=seg(w);return{x:(s[0].x+s[1].x)/2,y:(s[0].y+s[1].y)/2};}
+        if(inside){
+          if(S.closed&&P.length>=3){
+            var a=0,b=Math.floor(P.length/2);
+            [a,b].forEach(function(k){
+              add(fl,fi,si,sh.name,'view','View from corner '+(k+1),
+                'Stand in corner '+(k+1)+' and get the far walls in, floor to ceiling.',P[k]);
+            });
+          }
+          var c=sh.ceiling||{};
+          if(c.type==='sloped'||c.type==='tray')
+            add(fl,fi,si,sh.name,'ceiling','Ceiling',
+              c.type==='sloped'?'The slope, and where it meets the low and high walls.':'The tray, with the step down in.',null);
+        }else{
+          for(var w=0;w<n;w++)
+            add(fl,fi,si,sh.name,'wall','Wall '+(w+1),
+              'Straight on, back far enough to get the whole wall and the roof edge.',mid(w));
+          outsideCorners().forEach(function(k){
+            var wa=(k===0?n:k),wb=k+1;
+            add(fl,fi,si,sh.name,'corner','Corner '+(k+1),
+              'From the diagonal, so walls '+wa+' and '+wb+' both show.',P[k]);
+          });
+        }
+        for(var w2=0;w2<n;w2++)wallOpenings(w2).forEach(function(oi){
+          add(fl,fi,si,sh.name,'opening',openingText(oi),
+            'Straight on, the whole opening and its trim in.',mid(w2));
+        });
+      });
+    });
+  });
+  var jobShots=inside?JOB_SHOTS_INT.concat(floors.length>1?[STAIRS_SHOT]:[]):JOB_SHOTS_EXT;
+  if(out.length)jobShots.forEach(function(s){add(null,-1,-1,'','job',s[0],s[1],null);});
+  return out;
+}
+/* Where each shot stands: taken (with its photos), skipped, or still needed. */
+function shotState(){
+  var J=curJob(),L=shotList(),by={},skips=(J&&J.photoSkips)||{},need=[],done=0,sk=0;
+  jobPhotos().forEach(function(p){var k=photoKey(p);if(k)(by[k]=by[k]||[]).push(p);});
+  L.forEach(function(s){
+    s.photos=(by[s.key]||[]).slice().sort(function(a,b){return (a.n||0)-(b.n||0);});
+    s.skip=skips[s.key]||null;
+    if(s.photos.length)done++;else if(s.skip)sk++;else need.push(s);
+  });
+  return{list:L,need:need,done:done,skipped:sk};
+}
+/* Photos are numbered in the order taken, and keep that number for good,
+   so "photo 7" in an email still means the same picture next week. */
+function ensurePhotoNums(){
+  var L=jobPhotos(),mx=0,ch=false;
+  L.forEach(function(p){if(p.n>mx)mx=p.n;});
+  L.slice().sort(function(a,b){return a.at-b.at;}).forEach(function(p){if(!p.n){p.n=++mx;ch=true;}});
+  return ch;
+}
+function photoNums(list){
+  var ns=list.map(function(p){return p.n;}).sort(function(a,b){return a-b;});
+  return ns.length?'photo'+(ns.length>1?'s ':' ')+ns.join(', '):'';
+}
+/* For the summary: "   [photo 4]" after the line a photo belongs to. */
+function photoRefs(tag){
+  var k=shotKey(tag),L=jobPhotos().filter(function(p){return photoKey(p)===k;});
+  return L.length?'   ['+photoNums(L)+']':'';
+}
+/* The labels offered for a photo: the room or outline that's open, then the
+   whole job, then a few extras that aren't on the list. */
+function photoChoices(){
+  var j=cur(),sh=curShape(),inside=isInt(),out=[];
+  var fi=inside?curJob().interior.active:0,si=j.active;
+  shotList().forEach(function(s){if((s.fi===fi&&s.si===si)||s.fi===-1)out.push(s.tag);});
+  var base={side:inside?'int':'ext',floor:inside?j.floor:null,room:sh?sh.name:''};
+  function mk(kind,text){return{side:base.side,floor:base.floor,room:base.room,kind:kind,text:text};}
+  /* inside, walls aren't on the list (the corner views cover them) but a
+     close-up of one is still worth labelling */
+  if(inside)for(var w=0;w<segCount();w++)out.push(mk('wall','Wall '+(w+1)));
+  (inside?EXTRA_INT:EXTRA_EXT).forEach(function(n){out.push(mk('general',n));});
+  return out;
+}
+function sameTag(a,b){return !!(a&&b&&shotKey(a)===shotKey(b));}
+function copyTag(t){return{side:t.side,floor:t.floor,room:t.room,kind:t.kind,text:t.text};}
 
 function renderPhotos(view){
-  var L=jobPhotos(),bytes=0,notUp=0,untagged=0;
+  if(ensurePhotoNums())save();
+  var L=jobPhotos(),bytes=0,notUp=0,untagged=0,st=shotState();
   L.forEach(function(p){bytes+=p.bytes||0;if(!p.up)notUp++;if(!p.tag)untagged++;});
-  view.appendChild(el('div','tally',L.length
-    ? L.length+' photo'+(L.length>1?'s':'')+'  ·  '+mb(bytes)
-    : 'No photos yet'));
+  var total=st.list.length,need=st.need.length;
+  view.appendChild(el('div','tally'+(total&&!need?' done':''),total
+    ? 'Shot list  '+(total-need)+' of '+total+(need?'':'  ✓')+'   ·   '+L.length+' photo'+(L.length===1?'':'s')+', '+mb(bytes)
+    : (L.length?L.length+' photo'+(L.length===1?'':'s')+'  ·  '+mb(bytes):'No photos yet')));
+  if(need){
+    var n0=st.need[0];
+    var nx=el('button','primary','Next shot ›  '+n0.group+' · '+n0.tag.text);
+    nx.style.cssText='width:100%;text-transform:none;letter-spacing:0;font-family:var(--body);font-size:15px';
+    nx.addEventListener('click',function(){openShot(n0.key);});
+    var r0=el('div','sendrow');r0.appendChild(nx);view.appendChild(r0);
+  }
   var row=el('div','sendrow');
-  var take=el('button','primary','Take photo');
+  var take=el('button',need?'second':'primary',need?'Extra photo':'Take photo');
   var lib=el('button','second','From library');
-  take.addEventListener('click',function(){photoPick('camin');});
-  lib.addEventListener('click',function(){photoPick('libin');});
+  take.addEventListener('click',function(){pendingShot=null;photoPick('camin');});
+  lib.addEventListener('click',function(){pendingShot=null;photoPick('libin');});
   row.appendChild(take);row.appendChild(lib);view.appendChild(row);
   var signed=window.FMStore&&FMStore.signedIn();
   if(L.length&&!signed){
@@ -4848,17 +5002,30 @@ function renderPhotos(view){
     view.appendChild(el('div','chk ok','All backed up.'));
   }
   if(untagged)view.appendChild(el('div','chk',untagged+' not labelled yet — tap one to say what it is.'));
-  if(!L.length){
-    view.appendChild(el('div','empty-state','Each photo is shrunk to '+FMPhotos.MAX_EDGE+
-      ' px as it’s taken (about half a megabyte), so a whole job fits in one email. Label each one with the wall, opening or feature it shows.'));
+  if(!total&&!L.length){
+    view.appendChild(el('div','empty-state','Draw the '+(isInt()?'rooms':'outline')+' and the shot list builds itself from it: '+
+      (isInt()?'each room from two corners, sloped ceilings, every opening, the panel and mechanicals.'
+              :'every wall, every outside corner, every opening, the street and the meters.')));
     return;
   }
+  /* the list, grouped the way the summary is */
+  var lastG=null;
+  st.list.forEach(function(s){
+    if(s.group!==lastG){view.appendChild(el('div','sub',s.group));lastG=s.group;}
+    var val=s.photos.length?photoNums(s.photos):(s.skip?'skipped':'');
+    var b=rowBtn(s.tag.text,s.skip?s.skip:null,val,function(){openShot(s.key);},true);
+    if(s.photos.length)b.querySelector('.val').style.color='var(--ok)';
+    if(s.skip)b.querySelector('.val').style.color='var(--ink-2)';
+    view.appendChild(b);
+  });
+  if(!L.length)return;
+  view.appendChild(el('div','sub','All photos'));
   var grid=el('div','pgrid');
-  L.slice().sort(function(a,b){return a.at-b.at;}).forEach(function(p){
+  L.slice().sort(function(a,b){return a.n-b.n;}).forEach(function(p){
     var c=el('button','pcell');
     var img=document.createElement('img');img.alt=photoLabel(p);
     c.appendChild(img);
-    c.appendChild(el('div','pcap'+(p.tag?'':' untag'),photoLabel(p)));
+    c.appendChild(el('div','pcap'+(p.tag?'':' untag'),p.n+'  ·  '+photoLabel(p)));
     if(!p.up)c.appendChild(el('div','pup','on phone'));
     FMPhotos.url(p.id,curJob().id).then(function(u){if(u)img.src=u;});
     c.addEventListener('click',function(){openPhoto(p.id);});
@@ -4867,6 +5034,111 @@ function renderPhotos(view){
   view.appendChild(grid);
 }
 
+/* Show where a shot is: open its floor and room, and flash the spot. */
+function showShotOnDrawing(s){
+  if(s.fi<0)return;
+  var J=curJob();
+  if(isInt()&&J.interior&&J.interior.active!==s.fi){save();J.interior.active=s.fi;intoState();}
+  if(cur().active!==s.si){save();cur().active=s.si;intoState();}
+  if(s.at){focusAt(s.at);panelOpen=false;}   /* the list would hide the spot */
+  render();
+}
+function findShot(key){var L=shotState().list;for(var i=0;i<L.length;i++)if(L[i].key===key)return L[i];return null;}
+/* One shot: what to take, where to stand, take it or skip it. */
+function openShot(key){
+  var s=findShot(key);if(!s){closeModal();render();return;}
+  showShotOnDrawing(s);
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',s.tag.text));
+  mbox.appendChild(el('div','chk',s.group+(s.at?'  ·  flashing on the drawing':'')));
+  mbox.appendChild(el('div','shint',s.hint));
+  if(s.photos.length)mbox.appendChild(el('div','chk ok','Taken: '+photoNums(s.photos)+'. Another is fine if it helps.'));
+  if(s.skip)mbox.appendChild(el('div','chk','Skipped: '+s.skip+'.'));
+  var row=el('div','crow');row.style.marginTop='6px';
+  var take=el('button','mbtn mprimary',s.photos.length?'Take another':'Take photo');
+  take.addEventListener('click',function(){closeModal();pendingShot=copyTag(s.tag);photoPick('camin');});
+  var lib=el('button','mbtn msecondary','From library');
+  lib.addEventListener('click',function(){closeModal();pendingShot=copyTag(s.tag);photoPick('libin');});
+  row.appendChild(lib);row.appendChild(take);mbox.appendChild(row);
+  var row2=el('div','crow');row2.style.marginTop='8px';
+  if(s.photos.length){
+    var see=el('button','mbtn msecondary','See photo'+(s.photos.length>1?'s':''));
+    see.addEventListener('click',function(){openPhoto(s.photos[0].id);});
+    row2.appendChild(see);
+  }else if(s.skip){
+    var un=el('button','mbtn msecondary','Un-skip');
+    un.addEventListener('click',function(){setSkip(s.key,null);openShot(s.key);});
+    row2.appendChild(un);
+  }else{
+    var sk=el('button','mbtn msecondary','Skip…');
+    sk.addEventListener('click',function(){openSkip(s.key);});
+    row2.appendChild(sk);
+  }
+  var cl=el('button','mbtn msecondary','Close');
+  cl.addEventListener('click',function(){closeModal();panelOpen=true;render();});
+  row2.appendChild(cl);mbox.appendChild(row2);
+}
+function setSkip(key,reason){
+  var J=curJob();if(!J.photoSkips)J.photoSkips={};
+  if(reason)J.photoSkips[key]=reason;else delete J.photoSkips[key];
+  FMLog.add('shot-skip',{key:key,why:reason});
+  save();render();
+}
+/* A skip says why, so the summary can say why too. */
+function openSkip(key){
+  var s=findShot(key);if(!s)return;
+  mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle','Skip '+s.tag.text));
+  mbox.appendChild(el('div','chk','It’ll show as skipped in the summary, with the reason.'));
+  var wrap=el('div','pchips');
+  ['No access','Not there','Blocked','Not needed'].forEach(function(r){
+    var b=el('button','pchip',r);
+    b.addEventListener('click',function(){setSkip(key,r.toLowerCase());openShotNext(key,null);});
+    wrap.appendChild(b);
+  });
+  mbox.appendChild(wrap);
+  var back=el('button','mbtn msecondary','Back');back.style.width='100%';back.style.marginTop='8px';
+  back.addEventListener('click',function(){openShot(key);});
+  mbox.appendChild(back);
+}
+/* After a shot (or a skip): on to the next one still needed. */
+function nextNeeded(afterKey){
+  var st=shotState(),L=st.list,start=0;
+  for(var i=0;i<L.length;i++)if(L[i].key===afterKey){start=i+1;break;}
+  for(var k=0;k<L.length;k++){var s=L[(start+k)%L.length];if(!s.photos.length&&!s.skip)return s;}
+  return null;
+}
+function openShotNext(key,photo){
+  panelOpen=true;render();
+  var nx=nextNeeded(key);
+  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
+  mbox.appendChild(el('div','mtitle',photo?'Saved — photo '+photo.n:'Skipped'));
+  if(photo)mbox.appendChild(el('div','chk',photoLabel(photo)+'  ·  '+mb(photo.bytes||0)));
+  mbox.appendChild(el('div','shint',nx?'Next: '+nx.group+' · '+nx.tag.text:'That’s the whole shot list. ✓'));
+  var row=el('div','crow');row.style.marginTop='6px';
+  var done=el('button','mbtn msecondary','Done');
+  done.addEventListener('click',closeModal);
+  row.appendChild(done);
+  if(photo){
+    var again=el('button','mbtn msecondary','Retake');
+    again.addEventListener('click',function(){
+      var j=curJob();
+      j.photos=(j.photos||[]).filter(function(x){return x.id!==photo.id;});
+      FMPhotos.remove(photo.id,j.id);save();render();
+      closeModal();pendingShot=copyTag(photo.tag);photoPick('camin');
+    });
+    row.appendChild(again);
+  }
+  if(nx){
+    var go=el('button','mbtn mprimary','Next ›');
+    go.addEventListener('click',function(){openShot(nx.key);});
+    row.appendChild(go);
+  }
+  mbox.appendChild(row);
+}
+
+/* Set when a photo is for a shot on the list, so it labels itself. */
+var pendingShot=null;
 function photoPick(which){
   var inp=document.getElementById(which);
   inp.value='';
@@ -4875,6 +5147,7 @@ function photoPick(which){
 function photosIn(e){
   var files=[].slice.call(e.target.files||[]);
   e.target.value='';
+  var preset=pendingShot;pendingShot=null;
   if(!files.length)return;
   var j=curJob(),jobId=j.id,made=[];
   say(files.length>1?'Saving '+files.length+' photos…':'Saving photo…');render();
@@ -4882,23 +5155,27 @@ function photosIn(e){
   files.forEach(function(f){
     p=p.then(function(){
       return FMPhotos.add(f,jobId).then(function(meta){
-        meta.up=false;meta.tag=null;
         var owner=null;DB.jobs.forEach(function(x){if(x.id===jobId)owner=x;});
         if(!owner)return;
         if(!owner.photos)owner.photos=[];
+        var mx=0;owner.photos.forEach(function(q){if(q.n>mx)mx=q.n;});
+        meta.n=mx+1;meta.up=false;meta.tag=preset?copyTag(preset):null;
         owner.photos.push(meta);made.push(meta);
-        FMLog.add('photo',{id:meta.id,kb:Math.round(meta.bytes/1024)});
+        FMLog.add('photo',{id:meta.id,n:meta.n,kb:Math.round(meta.bytes/1024),tag:meta.tag&&meta.tag.text});
       },function(err){say((err&&err.message)||'Couldn’t save that photo.');});
     });
   });
   p.then(function(){
     save();
     if(!made.length){render();return;}
-    say(made.length>1?made.length+' photos saved.':'Photo saved.');
+    say(made.length>1?made.length+' photos saved.':'Photo '+made[0].n+' saved.');
     if(S.tab!=='photos'){openTab('photos');}
     render();
-    /* one photo: ask what it is right away, while it's in front of you */
-    if(made.length===1&&curJob().id===jobId)openPhotoTag(made[0].id,true);
+    if(curJob().id!==jobId)return;
+    /* for a shot on the list: on to the next one. A loose photo: ask what it is
+       right away, while it's in front of you. */
+    if(preset)openShotNext(shotKey(preset),made[made.length-1]);
+    else if(made.length===1)openPhotoTag(made[0].id,true);
   });
 }
 document.getElementById('camin').addEventListener('change',photosIn);
@@ -4906,20 +5183,20 @@ document.getElementById('libin').addEventListener('change',photosIn);
 
 function setPhotoTag(id,tag){
   var p=findPhoto(id);if(!p)return;
-  p.tag=tag;save();render();
+  p.tag=copyTag(tag);save();render();
 }
-/* "What is this a photo of?" — right after taking one, or to relabel. */
+/* "What is this a photo of?" — right after a loose photo, or to relabel. */
 function openPhotoTag(id,fresh){
   var p=findPhoto(id);if(!p)return;
   pendingDel=null;modal.hidden=false;mbox.innerHTML='';
-  mbox.appendChild(el('div','mtitle',fresh?'What’s this of?':'Label this photo'));
+  mbox.appendChild(el('div','mtitle',fresh?'What’s this of?':'Label photo '+p.n));
   var img=document.createElement('img');img.className='pbig';img.alt='';
   img.style.maxHeight='22vh';
   FMPhotos.url(id,curJob().id).then(function(u){if(u)img.src=u;});
   mbox.appendChild(img);
   var ch=photoChoices();
-  function group(title,kind){
-    var items=ch.filter(function(t){return t.kind===kind;});
+  function group(title,kinds){
+    var items=ch.filter(function(t){return kinds.indexOf(t.kind)>=0;});
     if(!items.length)return;
     mbox.appendChild(el('div','sub',title));
     var wrap=el('div','pchips');
@@ -4927,7 +5204,7 @@ function openPhotoTag(id,fresh){
       var b=el('button','pchip'+(sameTag(p.tag,t)?' on':''),t.text);
       b.addEventListener('click',function(){
         setPhotoTag(id,t);
-        if(fresh)openPhotoNext(id);else openPhoto(id);
+        if(fresh)openShotNext(shotKey(t),findPhoto(id));else openPhoto(id);
       });
       wrap.appendChild(b);
     });
@@ -4935,31 +5212,20 @@ function openPhotoTag(id,fresh){
   }
   var where=isInt()?cur().floor+' · '+curShape().name:curShape().name;
   mbox.appendChild(el('div','chk','On '+where+'. To label it for another '+(isInt()?'room':'outline')+', switch to it first.'));
-  group('Walls','wall');
-  group('Openings','opening');
-  group(isInt()?'The room':'The house','general');
+  group('Walls',['wall']);
+  group(isInt()?'The room':'Corners',['corner','view','ceiling']);
+  group('Openings',['opening']);
+  group('Whole job',['job']);
+  group('Other shots',['general']);
   var row=el('div','crow');row.style.marginTop='8px';
   var skip=el('button','mbtn msecondary',fresh?'Later':'Close');
-  skip.addEventListener('click',function(){if(fresh)openPhotoNext(id);else openPhoto(id);});
+  skip.addEventListener('click',function(){if(fresh)closeModal();else openPhoto(id);});
   row.appendChild(skip);mbox.appendChild(row);
-}
-/* After labelling a fresh shot: keep going, or stop. */
-function openPhotoNext(id){
-  var p=findPhoto(id);
-  pendingDel=null;modal.hidden=false;mbox.innerHTML='';
-  mbox.appendChild(el('div','mtitle','Saved'));
-  mbox.appendChild(el('div','chk',p?photoLabel(p)+'  ·  '+mb(p.bytes||0):''));
-  var row=el('div','crow');
-  var done=el('button','mbtn msecondary','Done');
-  done.addEventListener('click',closeModal);
-  var more=el('button','mbtn mprimary','Take another');
-  more.addEventListener('click',function(){closeModal();photoPick('camin');});
-  row.appendChild(done);row.appendChild(more);mbox.appendChild(row);
 }
 function openPhoto(id){
   var p=findPhoto(id);if(!p){closeModal();return;}
   pendingDel=null;modal.hidden=false;mbox.innerHTML='';
-  mbox.appendChild(el('div','mtitle',photoLabel(p)));
+  mbox.appendChild(el('div','mtitle','Photo '+p.n+' · '+photoLabel(p)));
   var img=document.createElement('img');img.className='pbig';img.alt=photoLabel(p);
   mbox.appendChild(img);
   var meta=el('div','pmeta','Loading…');mbox.appendChild(meta);
@@ -5362,7 +5628,13 @@ function render(){
   var htab=document.querySelector('.tab[data-tab="heights"]');
   if(htab)htab.textContent=isInt()?'Ceiling':'Heights';
   if(!anySeg){st.className='';stt.textContent=isInt()?'Draw the room first — tap each corner as you walk it.':'Draw the footprint first — tap each corner as you walk.';}
-  else if(total===0){st.className='clear';stt.textContent='Nothing blank. Good to leave the site.';}
+  else if(total===0){
+    /* measurements done: the photos are the last thing before leaving */
+    var pNeed=shotState().need.length;
+    st.className=pNeed?'':'clear';
+    stt.textContent=pNeed?'Measurements done. '+pNeed+' photo'+(pNeed>1?'s':'')+' still to take — see Photos.'
+                         :'Nothing blank. Good to leave the site.';
+  }
   else{
     st.className='';
     stt.textContent=(blList.length===1&&blList[0])
