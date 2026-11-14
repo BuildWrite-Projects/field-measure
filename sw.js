@@ -7,7 +7,8 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v41';
+var VERSION = 'fm-v42';
+/* fm-v42: email package (pdf.js) */
 /* fm-v41: guided shot list, photo numbers in the summary */
 /* fm-v40: photos (photos.js) */
 /* fm-v29: auto-fit to measurements (interior) */
@@ -17,6 +18,7 @@ var CORE = [
   'config.js',
   'storage.js',
   'photos.js',
+  'pdf.js',
   'feedback.js',
   'manifest.webmanifest',
   'icons/icon-180.png',

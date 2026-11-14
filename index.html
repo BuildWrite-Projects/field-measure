@@ -10,6 +10,7 @@
 <script src="config.js"></script>
 <script src="storage.js"></script>
 <script src="photos.js"></script>
+<script src="pdf.js"></script>
 <script src="feedback.js"></script>
 <script>
   /* Feedback button in the header, before the sync status */
@@ -4906,20 +4907,24 @@ function shotList(){
           if(c.type==='sloped'||c.type==='tray')
             add(fl,fi,si,sh.name,'ceiling','Ceiling',
               c.type==='sloped'?'The slope, and where it meets the low and high walls.':'The tray, with the step down in.',null);
-        }else{
-          for(var w=0;w<n;w++)
-            add(fl,fi,si,sh.name,'wall','Wall '+(w+1),
-              'Straight on, back far enough to get the whole wall and the roof edge.',mid(w));
-          outsideCorners().forEach(function(k){
-            var wa=(k===0?n:k),wb=k+1;
-            add(fl,fi,si,sh.name,'corner','Corner '+(k+1),
-              'From the diagonal, so walls '+wa+' and '+wb+' both show.',P[k]);
-          });
         }
-        for(var w2=0;w2<n;w2++)wallOpenings(w2).forEach(function(oi){
-          add(fl,fi,si,sh.name,'opening',openingText(oi),
-            'Straight on, the whole opening and its trim in.',mid(w2));
-        });
+        /* Outside, in the order you'd walk it, which is also the summary's
+           order: a wall, what's in it, then the corner at its far end. */
+        var outC={};if(!inside)outsideCorners().forEach(function(k){outC[k]=1;});
+        if(!inside&&S.closed&&outC[0])
+          add(fl,fi,si,sh.name,'corner','Corner 1','From the diagonal, so walls '+n+' and 1 both show.',P[0]);
+        for(var w=0;w<n;w++){
+          if(!inside)add(fl,fi,si,sh.name,'wall','Wall '+(w+1),
+            'Straight on, back far enough to get the whole wall and the roof edge.',mid(w));
+          wallOpenings(w).forEach(function(oi){
+            add(fl,fi,si,sh.name,'opening',openingText(oi),
+              'Straight on, the whole opening and its trim in.',mid(w));
+          });
+          var k=w+1;
+          if(!inside&&k<P.length&&outC[k])
+            add(fl,fi,si,sh.name,'corner','Corner '+(k+1),
+              'From the diagonal, so walls '+(w+1)+' and '+(w+2)+' both show.',P[k]);
+        }
       });
     });
   });
@@ -5265,6 +5270,204 @@ function openPhoto(id){
   cl.addEventListener('click',closeModal);
   mbox.appendChild(cl);
 }
+/* ---------- the job package ----------
+   One PDF with everything: each side's drawing and summary (outside, then
+   each inside floor), then every photo, in the order the summary reads,
+   with its number and label. Built on the phone, handed to the share sheet. */
+
+/* Look at another side or floor for a moment without disturbing what's open:
+   cur(), isInt() and the heights all follow job.side and the floor, so set
+   those, run, and put them straight back. Nothing in here may call save(). */
+function withView(side,fi,fn){
+  save();
+  var J=curJob(),oSide=J.side,oFi=J.interior?J.interior.active:0,oH=S.heights;
+  J.side=side;
+  if(side==='int')J.interior.active=fi;
+  S.heights=cur().heights||{};
+  try{return fn();}
+  finally{
+    if(oSide===undefined)delete J.side;else J.side=oSide;
+    if(J.interior)J.interior.active=oFi;
+    S.heights=oH;
+  }
+}
+function packageViews(){
+  var J=curJob(),v=[];
+  function drawn(shapes){return (shapes||[]).some(function(sh){return sh.pts&&sh.pts.length>1;});}
+  if(drawn(J.shapes))v.push({side:'ext',fi:0,title:'Exterior'});
+  ((J.interior&&J.interior.floors)||[]).forEach(function(f,fi){
+    if(drawn(f.shapes))v.push({side:'int',fi:fi,title:'Interior — '+f.floor});
+  });
+  return v;
+}
+function dataUrlBytes(u){
+  var s=atob(u.split(',')[1]),b=new Uint8Array(s.length);
+  for(var i=0;i<s.length;i++)b[i]=s.charCodeAt(i);
+  return b;
+}
+/* A photo as JPEG bytes for the PDF. Over the email limit, everything is
+   squeezed a bit more (1600 px, 70%) so the whole package still goes. */
+function photoForPdf(p,jobId,squeeze){
+  return FMPhotos.blob(p.id,jobId).then(function(b){
+    if(!b)return null;
+    if(!squeeze&&p.w&&p.h)
+      return b.arrayBuffer().then(function(ab){return{data:new Uint8Array(ab),w:p.w,h:p.h};});
+    return new Promise(function(res){
+      var u=URL.createObjectURL(b),img=new Image();
+      img.onload=function(){
+        var w=img.naturalWidth,h=img.naturalHeight,k=squeeze?Math.min(1,1600/Math.max(w,h)):1;
+        var c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        URL.revokeObjectURL(u);
+        var out={data:dataUrlBytes(c.toDataURL('image/jpeg',squeeze?0.7:0.85)),w:c.width,h:c.height};
+        c.width=c.height=0;
+        res(out);
+      };
+      img.onerror=function(){URL.revokeObjectURL(u);res(null);};
+      img.src=u;
+    });
+  });
+}
+var EMAIL_LIMIT=20*1048576;
+function buildPackage(prog){
+  var J=curJob(),views=packageViews(),parts=[],order=[],seen={};
+  ensurePhotoNums();
+  views.forEach(function(v){
+    withView(v.side,v.fi,function(){
+      var c=null;try{c=drawingCanvas();}catch(e){}
+      parts.push({title:v.title,text:summaryText(),
+        drawing:c?{data:dataUrlBytes(c.toDataURL('image/jpeg',0.88)),w:c.width,h:c.height}:null});
+      shotState().list.forEach(function(s){
+        s.photos.forEach(function(p){if(!seen[p.id]){seen[p.id]=1;order.push(p);}});
+      });
+    });
+  });
+  /* then anything off the list, by number */
+  jobPhotos().slice().sort(function(a,b){return a.n-b.n;})
+    .forEach(function(p){if(!seen[p.id]){seen[p.id]=1;order.push(p);}});
+  var raw=0;order.forEach(function(p){raw+=p.bytes||0;});
+  var squeeze=raw>EMAIL_LIMIT*0.9;
+
+  var d=FMPdf(),M=36,CW=d.W-2*M,BOT=d.H-M,y=M;
+  function room(h){if(y+h>BOT){d.page();y=M;}}
+  d.page();
+  d.text(M,y,J.name,20,'bold');y+=28;
+  var when=new Date().toLocaleDateString([], {year:'numeric',month:'long',day:'numeric'});
+  d.text(M,y,'Field measure  ·  '+when+'  ·  '+order.length+' photo'+(order.length===1?'':'s'),10,'regular',true);y+=18;
+  d.line(M,y,M+CW,y,true);y+=16;
+
+  parts.forEach(function(pt,i){
+    if(i>0){d.page();y=M;}
+    d.text(M,y,pt.title.toUpperCase(),14,'bold');y+=24;
+    if(pt.drawing){
+      var g=pt.drawing,dw=CW,dh=CW*g.h/g.w,maxH=Math.min(430,BOT-y);
+      if(dh>maxH){dh=maxH;dw=dh*g.w/g.h;}
+      d.image(g.data,g.w,g.h,M+(CW-dw)/2,y,dw,dh);y+=dh+16;
+    }
+    /* the summary in a fixed-width font so its columns still line up */
+    var SZ=8.5,LH=11,MAXC=Math.floor(CW/(SZ*0.6));
+    pt.text.split('\n').forEach(function(line){
+      var lead=(/^ */.exec(line)[0]).length,rest=line;
+      do{
+        var piece=rest.slice(0,MAXC);
+        if(rest.length>MAXC){var cut=piece.lastIndexOf(' ');if(cut>lead+10)piece=piece.slice(0,cut);}
+        room(LH);
+        if(piece.trim())d.text(M,y,piece,SZ,'mono');
+        y+=LH;
+        rest=rest.slice(piece.length).replace(/^ +/,'');
+        if(rest)rest=new Array(lead+5).join(' ')+rest;
+      }while(rest&&rest.trim());
+    });
+  });
+
+  var p=Promise.resolve(),done=0;
+  if(order.length){
+    p=p.then(function(){d.page();y=M;d.text(M,y,'PHOTOS',14,'bold');y+=24;});
+    order.forEach(function(ph){
+      p=p.then(function(){
+        prog&&prog('Adding photo '+(++done)+' of '+order.length+'…');
+        return photoForPdf(ph,J.id,squeeze).then(function(im){
+          var cap='Photo '+ph.n+'  —  '+photoLabel(ph);
+          if(!im){room(40);d.text(M,y,cap,10,'bold');y+=16;
+            d.text(M,y,'Not on this phone and not backed up yet.',9,'regular',true);y+=24;return;}
+          var dh=Math.min(300,CW*im.h/im.w),dw=dh*im.w/im.h;
+          room(16+dh+20);
+          d.text(M,y,cap,10,'bold');y+=16;
+          d.image(im.data,im.w,im.h,M,y,dw,dh);y+=dh+20;
+        });
+      });
+    });
+  }
+  return p.then(function(){
+    var blob=d.blob();
+    var nm=(J.name||'Job').replace(/[^\w \-]+/g,'').trim()||'Job';
+    var file=new File([blob],nm+' - field measure.pdf',{type:'application/pdf'});
+    return{file:file,photos:order.length,squeezed:squeeze,views:parts.length};
+  });
+}
+/* the last package built, so Send doesn't rebuild it */
+var pkg=null;
+function pkgFresh(){var J=curJob();return !!(pkg&&pkg.jobId===J.id&&pkg.stamp===J.updated);}
+function savePdf(f){
+  var a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);a.remove();},5000);
+}
+function packageBlock(view){
+  var J=curJob(),L=jobPhotos(),bytes=0;L.forEach(function(p){bytes+=p.bytes||0;});
+  var nv=packageViews().length;
+  var row=el('div','sendrow');
+  var go=el('button','primary',pkgFresh()?'Send package ›':'Email package');
+  var sv=el('button','second','Save PDF');sv.hidden=!pkgFresh();
+  row.appendChild(go);row.appendChild(sv);view.appendChild(row);
+  var note=el('div','chk');view.appendChild(note);
+  function tell(m,bad){note.className='chk'+(bad?' bad':'');note.textContent=m;}
+  function ready(){
+    var f=pkg.file,big=f.size>EMAIL_LIMIT;
+    tell('Ready: '+f.name+' — '+mb(f.size)+', '+pkg.photos+' photo'+(pkg.photos===1?'':'s')+'.'+
+      (pkg.squeezed?' Photos were shrunk a little more to fit an email.':'')+
+      (big?' That’s over most email limits — iPhone Mail will offer Mail Drop.':'')+
+      ' Tap Send to pick Mail.',big);
+  }
+  if(pkgFresh())ready();
+  else tell('One PDF: the drawing'+(nv>1?'s':'')+', every measurement and '+
+    (L.length?'all '+L.length+' photo'+(L.length===1?'':'s')+' (about '+mb(bytes+400000*nv)+')':'no photos yet')+'.');
+  go.addEventListener('click',function(){
+    if(pkgFresh()){
+      var f=pkg.file;
+      /* the share sheet needs a fresh tap, which is why building and sending
+         are two taps: the build can take longer than Safari will wait */
+      try{
+        if(navigator.share&&navigator.canShare&&navigator.canShare({files:[f]})){
+          navigator.share({files:[f],title:J.name+' — field measure',
+            text:'Field measure for '+J.name+'. The drawing, all the measurements and the photos are in the attached PDF.'})
+          .then(function(){tell('Handed to the share sheet.');logOut({step:'package-share',ok:true,kb:Math.round(f.size/1024)});},
+                function(err){
+                  if(err&&err.name==='AbortError'){tell('Cancelled — nothing sent.');return;}
+                  logOut({step:'package-share',ok:false,err:(err&&err.name)+':'+(err&&err.message)});
+                  savePdf(f);tell('The share sheet refused it, so the PDF was saved instead — attach it to an email.',true);
+                });
+          return;
+        }
+      }catch(e){logOut({step:'package-share',ok:false,err:String(e&&e.message||e)});}
+      savePdf(f);
+      tell('This browser can’t hand a file to Mail, so the PDF was saved — attach it to an email.');
+      return;
+    }
+    if(!nv){tell('Nothing drawn yet.',true);return;}
+    go.disabled=true;go.textContent='Building…';
+    buildPackage(function(m){tell(m);}).then(function(res){
+      pkg=res;pkg.jobId=J.id;pkg.stamp=J.updated;
+      FMLog.add('package',{kb:Math.round(res.file.size/1024),photos:res.photos});
+      go.disabled=false;go.textContent='Send package ›';sv.hidden=false;ready();
+    },function(e){
+      go.disabled=false;go.textContent='Email package';
+      tell('Couldn’t build it: '+((e&&e.message)||e),true);
+      logOut({step:'package',ok:false,err:String(e&&e.message||e)});
+    });
+  });
+  sv.addEventListener('click',function(){if(pkgFresh())savePdf(pkg.file);});
+}
 function initPhotos(){
   if(!window.FMPhotos)return;
   FMPhotos.init({
@@ -5456,6 +5659,7 @@ function render(){
       })(gq);}
     }
   }else{
+    packageBlock(view);
     view.appendChild(el('div','tally','Read this back in SketchUp'));
     var pre=el('pre',null,summaryText());pre.id='sumtext';view.appendChild(pre);
     var cp=el('button',null,'Copy measurements');cp.id='copy';

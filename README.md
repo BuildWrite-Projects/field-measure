@@ -28,6 +28,7 @@ Pages, installable to an iPhone home screen.
 - `index.html` — the whole app
 - `storage.js` — the only file that knows where data lives
 - `photos.js` — photos: shrinking, keeping them on the phone, backing them up
+- `pdf.js` — a small PDF maker for the emailed job package
 - `config.js` — connection settings
 - `sw.js` — offline support
 - `supabase-setup.sql` — the database table and its security rules
