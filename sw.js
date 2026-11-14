@@ -7,8 +7,8 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v43';
-/* fm-v43: outside drawn to the inch, with auto-fit */
+var VERSION = 'fm-v44';
+/* fm-v44: outside drawn to the inch, with auto-fit */
 /* fm-v42: email package (pdf.js) */
 /* fm-v41: guided shot list, photo numbers in the summary */
 /* fm-v40: photos (photos.js) */

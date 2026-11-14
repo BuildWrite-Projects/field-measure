@@ -884,6 +884,16 @@ function tieRefName(j,t){
   var r=j&&j.shapes&&j.shapes[tieRefIdx(t)];
   return (r&&r.name)||'House';
 }
+/* The "along" number runs from the tie wall's top-left corner: name it, as
+   the summary's corner list does (C1, C2...). */
+function tieCornerName(j,t){
+  var r=j&&j.shapes&&j.shapes[tieRefIdx(t)];
+  if(!r||!r.pts||r.pts.length<2||t.wall==null)return 'top-left corner';
+  return withShape(r,function(){
+    var k=wallStartCorner(t.wall)===0?t.wall:t.wall+1;
+    return 'top-left corner (C'+((k%S.pts.length)+1)+')';
+  });
+}
 /* A wall of some other outline, named the way it reads in a list. */
 function shapeWallLabel(sh,w){
   return withShape(sh,function(){
@@ -4751,10 +4761,86 @@ function afterSheetFromReview(){
   setTimeout(openReview,60);
 }
 function closeReview(){document.getElementById('review').hidden=true;}
+/* ---------- the summary, ready for SketchUp ----------
+   Each wall says which way it runs as drawn, seen from above (right/left =
+   SketchUp's red axis, up/down = green), between which two corners, so the
+   line tool can walk it: pick the direction, type the length. Openings say
+   where they start from the wall's own starting corner. Every outline gets a
+   closing check and its corners as x, y from Corner 1. */
+function dirWord(d){
+  var h=d.x>0.3?'right':(d.x<-0.3?'left':''),v=d.y>0.3?'down':(d.y<-0.3?'up':'');
+  return (v&&h)?v+'-'+h:(v||h);
+}
+function cName(k,n){return 'C'+((k%n)+1);}
+function hasVal(v){return v!==undefined&&v!==null&&String(v).trim()!=='';}
+/* Where an opening's near edge is, from the corner its wall starts at (in
+   sixteenths). From the tape when the spacing reaches it, otherwise read off
+   the drawing (tape:false). null if there's nothing to go on. */
+function openingStart16(w,oi){
+  var o=S.openings[oi],ow=dim16(o.w),L=dim16(wallLen(w)),st=wallStartCorner(w),ix=wallOpenings(w);
+  /* the spacing is taped from the wall's top-left end: add it up to here */
+  var run=0,ok=true;
+  for(var k=0;k<ix.length;k++){
+    var q=S.openings[ix[k]];
+    if(!hasVal(q.gap)){ok=false;break;}
+    run+=dim16(q.gap);
+    if(ix[k]===oi)break;
+    if(!hasVal(q.w)){ok=false;break;}
+    run+=dim16(q.w);
+  }
+  if(ok){
+    if(st===0)return{v:run,tape:true};
+    if(L&&ow)return{v:L-run-ow,tape:true};
+  }
+  var sg=seg(w),dl=Math.hypot(sg[1].x-sg[0].x,sg[1].y-sg[0].y);
+  var sc=inchScale()?16:scaleFactor();         /* sixteenths per drawing unit */
+  if(!sc||!dl)return null;
+  var c=o.t*dl*sc;
+  return{v:Math.max(0,Math.round(ow?c-ow/2:c)),tape:false,centre:!ow};
+}
+/* Do the lengths, walked in the drawn directions, come back to Corner 1? */
+function closeCheck(){
+  var n=segCount();if(!S.closed||n<3)return null;
+  var d=roomDirs(),ex=0,ey=0;
+  for(var i=0;i<n;i++){var L=dim16(wallLen(i));if(!L)return{need:true};ex+=d[i].x*L;ey+=d[i].y*L;}
+  return{off:Math.round(Math.hypot(ex,ey))};
+}
+/* Corners as x, y (sixteenths, right and up positive) from origin O, which
+   is Corner 1 of the first outline on this side or floor. On the inch scale
+   they come straight off the drawing; a corner only reached through an
+   unmeasured wall is marked ~. On an old sketch, only when every wall is
+   measured, walked from this outline's own Corner 1. */
+function cornerRows(O,placedBySketch){
+  var n=segCount(),P=S.pts,rows=[];if(!S.closed||n<3)return null;
+  var meas=[];for(var i=0;i<n;i++)meas.push(!!dim16(wallLen(i)));
+  if(inchScale()){
+    for(var k=0;k<n;k++){
+      var fw=true,bw=true;
+      for(var a=0;a<k;a++)if(!meas[a])fw=false;
+      for(var b=k;b<n;b++)if(!meas[b])bw=false;
+      rows.push({x:Math.round((P[k].x-O.x)*16),y:Math.round((O.y-P[k].y)*16),approx:placedBySketch||!(k===0||fw||bw)});
+    }
+    return rows;
+  }
+  if(meas.indexOf(false)>=0)return null;
+  var d=roomDirs(),x=0,y=0;
+  for(var k2=0;k2<n;k2++){
+    rows.push({x:Math.round(x),y:Math.round(y),approx:false});
+    var L=dim16(wallLen(k2));x+=d[k2].x*L;y-=d[k2].y*L;
+  }
+  return rows;
+}
+function padR(s,n){s=String(s);return s.length>=n?s+' ':s+new Array(n-s.length+1).join(' ');}
+function padL(s,n){s=String(s);return s.length>=n?' '+s:new Array(n-s.length+1).join(' ')+s;}
 function summaryText(){
   var out=[],j=cur(),inside=isInt();
   out.push((inside?'INTERIOR MEASURE':'EXTERIOR MEASURE')+(j?' \u2014 '+j.name:'')+(inside?' \u2014 '+j.floor:''));
   out.push('All measurements shown in '+(units()==='in'?'inches':'feet and inches')+'.');
+  out.push('Directions are as drawn, seen from above: right/left run along SketchUp\u2019s red axis,');
+  out.push('up/down along the green. C1, C2\u2026 are the corners in the order walked. ~ = off the sketch, not taped.');
+  /* every corner on this side or floor is measured from the first outline's Corner 1 */
+  var sh0=(j&&j.shapes&&j.shapes[0])||curShape(),O=(sh0===curShape()?S.pts[0]:(sh0.pts||[])[0])||{x:0,y:0};
+  O={x:O.x,y:O.y};
   if(inside){
     out.push('Inside faces of each room. Ceiling heights from the finished floor.');
     out.push('Wall thickness between rooms: '+(showLen(j.wallT)||j.wallT));
@@ -4765,7 +4851,9 @@ function summaryText(){
       /* the label a photo of something on this outline would carry */
       function here(text){return{side:inside?'int':'ext',floor:inside?j.floor:null,room:sh.name,text:text};}
       out.push('');
-      out.push(sh.name.toUpperCase()+'  ('+n+' walls, in order walked)');
+      /* y runs down the screen, so a positive area is clockwise as you see it */
+      var cw=shoelace(S.pts)>0;
+      out.push(sh.name.toUpperCase()+'  ('+n+' walls'+(S.closed&&n>2?', walked '+(cw?'clockwise':'counter-clockwise')+' from C1':', in order walked')+')');
       if(inside){
         var c=sh.ceiling||{};
         if(!c.type)out.push('  CEILING  \u2014 MISSING \u2014');
@@ -4783,27 +4871,31 @@ function summaryText(){
         if(t&&(t.out||t.along))
           out.push('  SITS  '+(showLen(t.out)||'— MISSING —')+' out from '+tieRefName(j,t)+
             ' wall '+(t.wall+1)+',  '+(showLen(t.along)||'— MISSING —')+
-            ' along that wall from its top-left corner');
+            ' along that wall from its '+tieCornerName(j,t));
         else
           out.push('  SITS  — MISSING — (not tied to the house)');
       }
+      var dirs=roomDirs(),np=S.pts.length;
       for(var i=0;i<n;i++){
-        out.push('  Wall '+(i+1)+'  '+(showLen(wallLen(i))||'— MISSING —')+photoRefs(here('Wall '+(i+1))));
+        out.push('  '+padR('Wall '+(i+1),8)+padR(cName(i,np)+'-'+cName(i+1,np),9)+padR(dirWord(dirs[i]),12)+
+          (showLen(wallLen(i))||'— MISSING —')+photoRefs(here('Wall '+(i+1))));
         var wrun=S.walls[i]&&S.walls[i].run;
         if(inside&&wrun&&wrun.len)
           out.push('      whole run, walls '+(i+1)+'-'+(wrun.to+1)+' straight across:  '+showLen(wrun.len));
         wallOpenings(i).forEach(function(oi){
           var o=S.openings[oi];
           /* "Window 2" when the wall has two: the name its photo carries */
-          var otx=openingText(oi);
+          var otx=openingText(oi),os=openingStart16(i,oi);
           out.push('      '+otx.replace(/ on wall \d+$/,'')+'  '+
             ((o.w&&o.h)?showLen(o.w)+' w x '+showLen(o.h)+' h':'— MISSING —')+
             (o.sill?'  (sill '+showLen(o.sill)+')':'')+
+            (os?'  '+(os.centre?'centre':'starts')+' '+(os.tape?'':'~')+fmt16(os.v)+' from '+cName(i,np):'')+
             (o.approx?'   [estimated]':'')+photoRefs(here(otx)));
         });
         var ch=gapChain(i);
         if(ch.length){
-          out.push('      spacing from the top-left corner, edge to edge:'+
+          /* taped from the wall's top-left end: say which corner that is */
+          out.push('      spacing as taped from '+cName(wallStartCorner(i)===0?i:i+1,np)+', edge to edge:'+
             ((S.walls[i]&&S.walls[i].approx)?'   [estimated]':''));
           ch.forEach(function(r){
             out.push('        '+r.from+' to '+r.to+'  '+(showLen(r.value)||'— MISSING —'));
@@ -4813,6 +4905,20 @@ function summaryText(){
             out.push('        ** '+fmt16(Math.abs(ck.diff))+(ck.diff>0?' over':' under')+' the wall length **');
         }
       }
+      /* does it close, and where every corner is */
+      var cc=closeCheck();
+      if(cc&&cc.need)out.push('  CLOSES  can’t check until every wall has a length');
+      else if(cc)out.push(cc.off<=4?'  CLOSES  within 1/4"  ok'
+        :'  DOESN’T CLOSE  off by '+fmt16(cc.off)+' — a length or a corner is off');
+      var bySketch=!inside&&si>0;
+      var cr=cornerRows(inchScale()?O:S.pts[0],bySketch);
+      if(cr){
+        out.push('  CORNERS  x, y from '+(inchScale()?(sh0.name||'')+' C1':'this outline’s C1')+
+          ' (right and up are +)'+(bySketch?' — placed from the sketch; SITS is the taped position':''));
+        cr.forEach(function(r,k){
+          out.push('    '+padR('C'+(k+1),5)+padL((r.approx?'~':'')+fmt16(r.x),14)+padL((r.approx?'~':'')+fmt16(r.y),14));
+        });
+      }else if(S.closed&&n>2)out.push('  CORNERS  once every wall has a length');
       var gl=[];
       for(var gi=0;gi<S.pts.length;gi++)
         if(S.pts[gi].g)gl.push('    Corner '+(gi+1)+'  '+showLen(S.pts[gi].g));
