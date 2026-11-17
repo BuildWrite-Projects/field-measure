@@ -7,7 +7,8 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v44';
+var VERSION = 'fm-v45';
+/* fm-v45: shot list leaves the drawing movable behind its cards, wall numbers showing */
 /* fm-v44: outside drawn to the inch, with auto-fit */
 /* fm-v42: email package (pdf.js) */
 /* fm-v41: guided shot list, photo numbers in the summary */

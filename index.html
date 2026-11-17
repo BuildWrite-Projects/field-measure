@@ -17,7 +17,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     var hdr = document.getElementById('hdr');
     if (hdr && window.BWFeedback) BWFeedback.mount({ app: 'field-measure', into: hdr, before: document.getElementById('sync'),
-      client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-12',
+      client: function () { return window.FMStore && FMStore.client && FMStore.client(); }, version: '2026-11-16',
       extra: function () { return window.FMLog ? FMLog.text() : ''; },
       hint: 'No keyboard? With the Disto paired, the iPhone hides its own: hold the Disto’s arrow key for a second to bring it up, or switch the Disto off while you type.' });
   });
@@ -77,6 +77,9 @@ header h1{font-family:var(--display);font-size:21px;line-height:1.05;letter-spac
   border-radius:6px;padding:4px 9px;max-width:52vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.9}
 #modal{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;z-index:30}
 #modal[hidden]{display:none!important}
+/* shot list: no shade, and touches outside the box reach the drawing */
+#modal.peek{background:transparent;pointer-events:none}
+#modal.peek #modalbox{pointer-events:auto;box-shadow:0 -6px 24px rgba(0,0,0,.22)}
 /* a box you type into (rename, new room, new floor, new job) sits at the top,
    clear of the phone's keyboard */
 #modal.typing{align-items:flex-start}
@@ -1122,6 +1125,7 @@ function paint(){
   var hideNums=V.s*zf()<1/1.15;
   /* Pinched right out, even the gap markers go and it's bare lines. */
   var bare=V.s<=minZ()*1.03;
+  var peekNums=peeking();
   var n=segCount();
   /* walls the measurements already pin down draw as done, with their length */
   var woP={};try{woP=isInt()?workedOut():{};}catch(e){}
@@ -1181,6 +1185,17 @@ function paint(){
   for(var j=0;j<n;j++){
     var s2=seg(j),A2=W2S(s2[0]),B2=W2S(s2[1]),mx=(A2.x+B2.x)/2,my=(A2.y+B2.y)/2;
     var L=showLen(wallLen(j))||(woP[j]?fmt16(Math.round(woP[j]*16)):'');
+    /* taking photos: the shot list says "Wall 3", so every wall shows its
+       number (in green once measured) instead of its length */
+    if(L&&peekNums&&!tiny){
+      var pl=String(j+1),ph=Math.round(Math.max(15,20*hs));
+      ctx.font='700 '+Math.round(Math.max(10,12*hs))+'px "IBM Plex Sans",sans-serif';
+      var pw=Math.max(ph,ctx.measureText(pl).width+10);
+      ctx.fillStyle=C.surf;ctx.strokeStyle=C.ok;ctx.lineWidth=1.8;
+      rr(mx-pw/2,my-ph/2,pw,ph,5);ctx.fill();ctx.stroke();
+      ctx.fillStyle=C.ok;ctx.fillText(pl,mx,my+.5);
+      continue;
+    }
     if(L){
       if(hideNums)continue;
       ctx.font='600 12.5px "IBM Plex Mono",monospace';
@@ -2739,7 +2754,8 @@ cv.addEventListener('pointerdown',function(e){
                      alignOn?ALIGN_GRAB:DRAG_GRAB);
     grpIdx=-1;
     if(alignOn&&alignSel.length>=2&&hc>=0&&alignSel.indexOf(hc)>=0)grpIdx=hc;
-    dragIdx=(S.locked||roomLockedNow()||S.mode==='open'||alignOn||jogOn||cutOn||eraseOn)?-1:hc;
+    if(peeking())grpIdx=-1;
+    dragIdx=(peeking()||S.locked||roomLockedNow()||S.mode==='open'||alignOn||jogOn||cutOn||eraseOn)?-1:hc;
   }
   else if(k.length===2){
     moved=true;dragIdx=-1;dragLive=false;
@@ -2821,7 +2837,8 @@ cv.addEventListener('pointermove',function(e){
 function endPtr(e){
   var single=ids().length===1&&ptrs[e.pointerId];
   delete ptrs[e.pointerId];
-  if(single&&!moved&&startPt){
+  if(single&&!moved&&startPt&&peeking()){/* looking only */}
+  else if(single&&!moved&&startPt){
     var r=cv.getBoundingClientRect();
     tap({x:startPt.x-r.left,y:startPt.y-r.top});
   }else if(single&&grpLive){grpLive=false;render();}
@@ -5207,7 +5224,8 @@ function openShot(key){
   showShotOnDrawing(s);
   pendingDel=null;modal.hidden=false;mbox.innerHTML='';
   mbox.appendChild(el('div','mtitle',s.tag.text));
-  mbox.appendChild(el('div','chk',s.group+(s.at?'  ·  flashing on the drawing':'')));
+  mbox.appendChild(peekMark());
+  mbox.appendChild(el('div','chk',s.group+(s.at?'  ·  flashing on the drawing — drag or pinch it to look around':'')));
   mbox.appendChild(el('div','shint',s.hint));
   if(s.photos.length)mbox.appendChild(el('div','chk ok','Taken: '+photoNums(s.photos)+'. Another is fine if it helps.'));
   if(s.skip)mbox.appendChild(el('div','chk','Skipped: '+s.skip+'.'));
@@ -5246,6 +5264,7 @@ function openSkip(key){
   var s=findShot(key);if(!s)return;
   mbox.innerHTML='';
   mbox.appendChild(el('div','mtitle','Skip '+s.tag.text));
+  mbox.appendChild(peekMark());
   mbox.appendChild(el('div','chk','It’ll show as skipped in the summary, with the reason.'));
   var wrap=el('div','pchips');
   ['No access','Not there','Blocked','Not needed'].forEach(function(r){
@@ -5270,6 +5289,7 @@ function openShotNext(key,photo){
   var nx=nextNeeded(key);
   pendingDel=null;modal.hidden=false;mbox.innerHTML='';
   mbox.appendChild(el('div','mtitle',photo?'Saved — photo '+photo.n:'Skipped'));
+  mbox.appendChild(peekMark());
   if(photo)mbox.appendChild(el('div','chk',photoLabel(photo)+'  ·  '+mb(photo.bytes||0)));
   mbox.appendChild(el('div','shint',nx?'Next: '+nx.group+' · '+nx.tag.text:'That’s the whole shot list. ✓'));
   var row=el('div','crow');row.style.marginTop='6px';
@@ -6240,7 +6260,13 @@ modal.addEventListener('click',function(e){if(e.target===modal)closeModal();});
 /* whichever box is showing: if it has a typing field, move it to the top */
 try{new MutationObserver(function(){
   modal.classList.toggle('typing',!!mbox.querySelector('input[type=text],textarea'));
+  var pk=!!mbox.querySelector('[data-peek]');
+  if(pk!==modal.classList.contains('peek')){modal.classList.toggle('peek',pk);paint();}
 }).observe(mbox,{childList:true,subtree:true});}catch(e){}
+/* The shot list's boxes leave the drawing live behind them, so you can pan
+   and pinch to see what the shot is of. Look only: no corners, no taps. */
+function peekMark(){var m=document.createElement('span');m.setAttribute('data-peek','1');m.hidden=true;return m;}
+function peeking(){return !!(typeof modal!=='undefined'&&modal&&!modal.hidden&&modal.classList.contains('peek'));}
 function closeModal(){modal.hidden=true;mbox.innerHTML='';pendingDel=null;}
 function jobStats(j){
   /* walls across every outline (jobs keep outlines in j.shapes; very old
