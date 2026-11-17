@@ -29,12 +29,16 @@
   /* ---------- sign-in sheet ---------------------------------------------- */
   /* Kept in here rather than index.html so the whole auth story lives in one
      file. Styled off the app's existing CSS variables so it matches. */
+  /* Hangs from the top of the screen, like the feedback box: anchored to the
+     bottom, the phone's keyboard came up over the lower boxes and the Create
+     account button, and a friend couldn't get her account made. */
   function sheet(html) {
     var w = document.createElement('div');
     w.style.cssText = 'position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.5);' +
-      'display:flex;align-items:flex-end';
-    w.innerHTML = '<div style="width:100%;background:var(--surface,#fff);color:var(--ink,#111);' +
-      'border-radius:14px 14px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom,0px));' +
+      'display:flex;align-items:flex-start';
+    w.innerHTML = '<div style="width:100%;max-height:100%;overflow-y:auto;box-sizing:border-box;' +
+      'background:var(--surface,#fff);color:var(--ink,#111);' +
+      'border-radius:0 0 14px 14px;padding:calc(16px + env(safe-area-inset-top,0px)) 16px 16px;' +
       'display:flex;flex-direction:column;gap:11px;font-family:var(--body,system-ui)">' + html + '</div>';
     document.body.appendChild(w);
     return w;
@@ -42,9 +46,19 @@
 
   function askToSignIn() {
     if (!client) {
-      var n = sheet('<div style="font-size:15px;line-height:1.5">No connection right now, so ' +
-        'signing in will have to wait. Your measurements are saving to this phone and will ' +
-        'sync once you are back online.</div>' +
+      /* Two different problems: no signal at all, or signal but the sign-in
+         code (supabase.js, from another site) never loaded — a content blocker,
+         private browsing or a work network can do that. Say which. */
+      var online = navigator.onLine !== false;
+      var n = sheet('<div style="font-size:15px;line-height:1.5">' + (online
+        ? 'The sign-in part of the app didn’t load, so you can’t sign in or make an ' +
+          'account yet. Tap Try again. If it keeps happening, turn off any ad or content ' +
+          'blocker and private browsing, or try a different Wi-Fi or mobile data. '
+        : 'No connection right now, so signing in will have to wait. ') +
+        'Your measurements are saving to this phone either way.</div>' +
+        (online ? '<button id="fmre" style="border:none;border-radius:9px;padding:13px;background:var(--accent,#ff5a1f);' +
+          'color:var(--accent-ink,#fff);font-family:var(--display,system-ui);font-size:16px;letter-spacing:.06em;' +
+          'text-transform:uppercase;font-weight:700">Try again</button>' : '') +
         '<button id="fmok" style="border:none;border-radius:9px;padding:13px;background:var(--surface-2,#eee);' +
         'color:var(--ink,#111);font-family:var(--display,system-ui);font-size:16px;letter-spacing:.06em;' +
         'text-transform:uppercase;font-weight:700">Close</button>' +
@@ -52,6 +66,8 @@
         'color:var(--ink-2,#666);word-break:break-word;border-top:1px solid var(--line,#ccc);' +
         'padding-top:9px">checking offline support...</div>');
       n.querySelector('#fmok').onclick = function () { n.remove(); };
+      var re = n.querySelector('#fmre');
+      if (re) re.onclick = function () { location.reload(); };
       offlineReport(n.querySelector('#fmdiag'));
       return;
     }
@@ -132,7 +148,10 @@
       var pass = pw.value || '';
       if (!email || !pass) { msg.textContent = 'Fill in both boxes.'; return; }
       if (creating && pass.length < 8) { msg.textContent = 'Use at least 8 characters.'; return; }
-      if (creating && pass !== (pw2.value || '')) { msg.textContent = 'The two passwords don’t match. Type them again.'; pw2.value = ''; pw2.focus(); return; }
+      /* The iPhone's suggested strong password can land in the first box only,
+         so an empty second box gets its own plain instruction. */
+      if (creating && !pw2.value) { msg.textContent = 'Type the same password again in the third box.'; pw2.focus(); return; }
+      if (creating && pass !== pw2.value) { msg.textContent = 'The two passwords don’t match. Type the second one again.'; pw2.value = ''; pw2.focus(); return; }
       go.disabled = true;
       msg.textContent = creating ? 'Creating...' : 'Signing in...';
 

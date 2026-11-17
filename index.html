@@ -7,6 +7,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Field Measure">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>/* jsdelivr blocked on some networks and by some blockers: try a second source before giving up on sign-in */
+if (!window.supabase && navigator.onLine !== false) document.write('<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"><\/script>');</script>
 <script src="config.js"></script>
 <script src="storage.js"></script>
 <script src="photos.js"></script>
@@ -69,10 +71,15 @@ header{background:var(--ink);color:var(--bg);display:flex;align-items:center;jus
   padding:calc(9px + env(safe-area-inset-top,0px)) 16px 9px}
 header h1{font-family:var(--display);font-size:21px;line-height:1.05;letter-spacing:.06em;text-transform:uppercase;margin:0;font-weight:700;min-width:0}
 #hdr{display:flex;align-items:center;gap:8px;min-width:0;flex:0 0 auto}
-#sync{font-family:var(--body);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
-  color:var(--bg);opacity:.6;white-space:nowrap;display:inline-block;width:6.2em;text-align:right;overflow:hidden;text-overflow:ellipsis}
-#sync.ok{opacity:.75}
-#sync.warn{opacity:1;color:#ffd4c2}
+/* The sync status is also the way in to signing in, so it reads as a button:
+   outlined, full strength, and an orange "Sign in" while nobody is signed in.
+   (Small and faded, a friend couldn't find it from the instructions.) */
+#sync{font-family:var(--body);font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+  color:var(--bg);border:1px solid currentColor;border-radius:6px;padding:4px 8px;box-sizing:border-box;
+  white-space:nowrap;display:inline-block;min-width:5.6em;text-align:center;overflow:hidden;text-overflow:ellipsis}
+#sync.ok{opacity:.85}
+#sync.warn{color:#ffd4c2}
+#sync.signin{background:var(--accent,#ff5a1f);border-color:var(--accent,#ff5a1f);color:var(--accent-ink,#fff)}
 #jobbtn{font-family:var(--body);font-size:12px;color:var(--bg);background:none;border:1px solid currentColor;
   border-radius:6px;padding:4px 9px;max-width:52vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.9}
 #modal{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;z-index:30}
@@ -739,9 +746,12 @@ window.FMLog=(function(){
 function logOut(o){ try{ console.log('[FM]',o); }catch(e){} }
 function setSync(mode){
   var e=document.getElementById('sync');if(!e)return;
-  var txt={connecting:'syncing',saving:'saving',ok:'saved',local:'phone only',err:'not saved'}[mode]||'';
+  var out=mode==='local'&&!(window.FMStore&&FMStore.signedIn&&FMStore.signedIn());
+  var txt=out?'Sign in':({connecting:'syncing',saving:'saving',ok:'saved',local:'phone only',err:'not saved'}[mode]||'');
   e.textContent=txt;
-  e.className=(mode==='ok')?'ok':((mode==='local'||mode==='err')?'warn':'');
+  e.className=out?'signin':(mode==='ok')?'ok':((mode==='local'||mode==='err')?'warn':'');
+  e.setAttribute('role','button');
+  e.setAttribute('aria-label',out?'Sign in or create an account':'Sync: '+txt+'. Tap for account');
 }
 function schedulePush(){
   if(window.FMStore) FMStore.push(DB);

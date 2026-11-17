@@ -7,7 +7,8 @@
  * Bump VERSION whenever the app files change, or phones will keep serving the old
  * copy from cache.
  */
-var VERSION = 'fm-v45';
+var VERSION = 'fm-v46';
+/* fm-v46: sign-in/sign-up sheets hang from the top (keyboard hid Create account), clearer no-library message, second source for supabase.js, header status is a readable button ("Sign in" when signed out) */
 /* fm-v45: shot list leaves the drawing movable behind its cards, wall numbers showing */
 /* fm-v44: outside drawn to the inch, with auto-fit */
 /* fm-v42: email package (pdf.js) */
